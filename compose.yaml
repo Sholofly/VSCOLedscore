@@ -1,0 +1,22 @@
+services:
+  websocket-logger:
+    build: .
+    # Op de NAS: zet IMAGE=ghcr.io/<jouwnaam>/<repo>:latest in .env en gebruik 'docker compose pull'.
+    image: ${IMAGE:-vsco-scorebord-connector}
+    env_file:
+      - .env
+    environment:
+      TZ: Europe/Amsterdam
+      # De webomgeving is alleen bruikbaar met een wachtwoord; zet WEB_PASSWORD in .env.
+      WEB_PASSWORD: ${WEB_PASSWORD:?Zet WEB_PASSWORD in .env (zie .env.example)}
+      WEB_PORT: "8080"
+    ports:
+      # Alleen bereikbaar vanaf deze computer. Voor je netwerk: haal "127.0.0.1:" weg.
+      - "127.0.0.1:${HOST_PORT:-8080}:8080"
+    volumes:
+      - scorebord-data:/app/data   # URL, token en sjablonen die je in de webomgeving instelt
+      - ./logs:/app/logs           # app.log en websocket-raw.log
+    restart: unless-stopped
+
+volumes:
+  scorebord-data:
