@@ -68,6 +68,19 @@ Bijwerken na een nieuwe versie:
 git pull && docker compose pull && docker compose up -d
 ```
 
+- **Wacht tot de image klaar is.** Na elke push bouwt GitHub de image; dat duurt
+  een paar minuten. Pull je te vroeg, dan krijg je nog de oude versie. Kijk bij
+  het tabblad Actions van de repo of de laatste run groen is.
+- **Controleren:** `docker compose ps` moet `healthy` tonen en
+  `docker compose logs --tail 20` moet `Webomgeving bereikbaar` en
+  `Verbonden met het scorebord` bevatten.
+- **Je instellingen blijven bewaard:** `.env` staat niet in git en de URL, het
+  token en de sjablonen uit de webomgeving staan in het volume `scorebord-data`.
+- **`git pull` klaagt over lokale wijzigingen?** Dan is een bestand in de map
+  aangepast, vaak `compose.yaml`. Zet instellingen altijd in `.env`. Met
+  `git status` zie je welk bestand het is.
+- Oude, ongebruikte images ruim je op met `docker image prune`.
+
 - **Privé-repo:** de image is dan ook privé. Maak op GitHub een token met alleen
   `read:packages` en log eenmalig in: `echo <token> | docker login ghcr.io -u <jouwnaam> --password-stdin`.
   Voor `git clone` gebruik je hetzelfde soort token of een deploy key. Je kunt
