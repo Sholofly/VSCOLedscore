@@ -34,10 +34,11 @@ docker compose logs -f
 ```
 
 De webomgeving staat op <http://127.0.0.1:8080> (poort aanpasbaar met
-`HOST_PORT` in `.env`) en is standaard alleen vanaf deze computer bereikbaar.
-Wil je hem op je netwerk gebruiken, haal dan `127.0.0.1:` weg uit
-[compose.yaml](compose.yaml) en gebruik een sterk wachtwoord; de verbinding is
-niet versleuteld, dus zet er HTTPS voor als hij buiten je eigen netwerk komt.
+`HOST_PORT` in `.env`) en is standaard alleen vanaf de machine zelf bereikbaar.
+Wil je hem op je netwerk gebruiken (bijvoorbeeld op een NAS), zet dan
+`BIND_ADDRESS=0.0.0.0` in `.env`, gebruik een sterk wachtwoord en open hem op
+`http://<ip-van-de-machine>:<HOST_PORT>`. De verbinding is niet versleuteld, dus
+zet er HTTPS voor als hij buiten je eigen netwerk komt.
 
 De container draait niet als root, heeft een healthcheck (`/health`), start zelf
 opnieuw (`unless-stopped`) en stopt netjes bij `docker stop`. De map `./logs`
@@ -75,10 +76,11 @@ git pull && docker compose pull && docker compose up -d
   `data/`. Zet je token dus alleen op de NAS, of in de webomgeving.
 - Kan de NAS `./logs` niet schrijven, dan start de app toch en logt hij alleen
   naar de console (en toont hij een waarschuwing).
-- De webomgeving staat standaard op `127.0.0.1:8080` van de NAS. Wil je er vanaf
-  je pc bij, haal dan `127.0.0.1:` weg uit [compose.yaml](compose.yaml), kies een
-  sterk wachtwoord en zet er HTTPS voor als je hem buiten je eigen netwerk
-  gebruikt.
+- De webomgeving is standaard alleen bereikbaar vanaf de NAS zelf. Wil je er
+  vanaf je pc bij, zet dan `BIND_ADDRESS=0.0.0.0` in `.env` (met `HOST_PORT` voor
+  een andere poort), kies een sterk wachtwoord en herstart met
+  `docker compose up -d`. Blokkeert de firewall van de NAS de poort, open hem
+  dan daar. Zet er HTTPS voor als je hem buiten je eigen netwerk gebruikt.
 
 ## Lokaal draaien
 
