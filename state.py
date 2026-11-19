@@ -1,11 +1,27 @@
 """Verbindingsstatus, door de verbinding bijgewerkt en door de webomgeving getoond."""
 
+import logging
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 
 
 def now() -> datetime:
     return datetime.now().astimezone()
+
+
+class MemoryLogHandler(logging.Handler):
+    """Bewaart de laatste logregels in het geheugen, voor als het logbestand niet kan."""
+
+    def __init__(self, capacity: int = 500) -> None:
+        super().__init__()
+        self.lines: deque[str] = deque(maxlen=capacity)
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            self.lines.append(self.format(record))
+        except Exception:
+            self.handleError(record)
 
 
 @dataclass
@@ -20,6 +36,11 @@ class ConnectionState:
     last_error: str = ""
     last_error_at: datetime | None = None
     next_retry_at: datetime | None = None
+    # De laatste wedstrijdberichten (wat de app als melding heeft gegenereerd).
+    messages: deque[tuple[datetime, str]] = field(default_factory=lambda: deque(maxlen=100))
+
+    def add_message(self, text: str) -> None:
+        self.messages.append((now(), text))
 
     def set(self, status: str, level: str = "warn", detail: str = "") -> None:
         self.status = status

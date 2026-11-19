@@ -6,7 +6,7 @@ from aiohttp.test_utils import AioHTTPTestCase
 
 from messages import DEFAULT_TEMPLATES
 from settings import Settings
-from state import ConnectionState
+from state import ConnectionState, MemoryLogHandler
 from web import create_web_app, display_url, tail_lines
 
 TOKEN = "JWT supergeheim-token-123"
@@ -159,6 +159,48 @@ class WebTests(AioHTTPTestCase):
         self.assertIn("&lt;script&gt;", body)
         self.assertIn("ingekort", body)
         self.assertLess(len(body), 20000)
+
+    async def test_logs_fall_back_to_memory_when_the_log_file_is_unavailable(self):
+        import logging
+
+        memory = MemoryLogHandler()
+        memory.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
+        logger = logging.getLogger("test_web_memory")
+        logger.propagate = False
+        logger.addHandler(memory)
+        self.addCleanup(logger.removeHandler, memory)
+        logger.warning("alleen in het geheugen <b>")
+        self.app["memory_log"] = memory
+
+        body = await (await self.client.get("/logs", headers=AUTH)).text()
+        self.assertIn("WARNING alleen in het geheugen &lt;b&gt;", body)
+        self.assertIn("logbestand is niet beschikbaar", body)
+
+        self.app_log.write_text("2026 INFO uit bestand\n", encoding="utf-8")
+        body = await (await self.client.get("/logs", headers=AUTH)).text()
+        self.assertIn("uit bestand", body)
+        self.assertNotIn("alleen in het geheugen", body)
+
+    async def test_live_data_endpoint_returns_messages_and_log_and_needs_login(self):
+        self.assertEqual((await self.client.get("/logs/data")).status, 401)
+        self.state.add_message("'12 DOELPUNT <VSCO>! Naam!")
+        self.app_log.write_text("2026 INFO eerste\n2026 INFO tweede\n", encoding="utf-8")
+        resp = await self.client.get("/logs/data", headers=AUTH)
+        data = await resp.json()
+        self.assertEqual(resp.status, 200)
+        self.assertIn("'12 DOELPUNT <VSCO>! Naam!", data["messages"])  # JSON, de pagina zet het als tekst neer
+        self.assertTrue(data["app"].startswith("2026 INFO tweede"))  # nieuwste bovenaan
+        self.assertNotIn("supergeheim", str(data))
+
+    async def test_logs_page_shows_messages_and_is_live(self):
+        self.state.add_message("'5 Doelpunt <b>Uit</b>.")
+        resp = await self.client.get("/logs", headers=AUTH)
+        body = await resp.text()
+        self.assertIn("&#x27;5 Doelpunt &lt;b&gt;Uit&lt;/b&gt;.", body)
+        self.assertIn("/logs/data", body)
+        csp = resp.headers["Content-Security-Policy"]
+        self.assertIn("connect-src 'self'", csp)
+        self.assertNotIn("http-equiv", body)  # geen volledige herlaadslag meer nodig
 
     async def test_missing_log_files_do_not_break_the_page(self):
         resp = await self.client.get("/logs", headers=AUTH)

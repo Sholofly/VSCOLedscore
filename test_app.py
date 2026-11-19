@@ -284,8 +284,10 @@ class UnwritableLogTests(unittest.TestCase):
             saved = root.handlers[:], root.level
             try:
                 settings = Settings(Path(folder) / "s.json")
-                app.setup_logging(settings, blocker / "sub" / "app.log")
-                self.assertEqual(len(root.handlers), 1)  # alleen de console
+                memory = app.setup_logging(settings, blocker / "sub" / "app.log")
+                self.assertEqual(len(root.handlers), 2)  # console en geheugen, geen bestand
+                logging.getLogger("test_unwritable").warning("blijft zichtbaar")
+                self.assertTrue(any("blijft zichtbaar" in line for line in memory.lines))
             finally:
                 root.handlers[:], root.level = saved[0], saved[1]
 

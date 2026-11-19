@@ -112,8 +112,11 @@ uitvoer wordt ge-escaped.
 - **Berichten:** de teksten van alle berichten, met voorbeeld. Een leeg
   sjabloon betekent dat dat bericht niet wordt verstuurd. Wijzigingen werken
   direct, zonder herstart.
-- **Logging:** de laatste 300 regels van `app.log` (nieuwste bovenaan) en de
-  laatste 10 ruwe berichten, ingekort.
+- **Logging:** live bijgewerkt (elke 2 seconden, zonder de pagina te herladen):
+  de wedstrijdberichten die de app heeft gemaakt, de laatste 300 regels van
+  `app.log` (nieuwste bovenaan) en bij het laden de laatste 10 ruwe berichten,
+  ingekort. Kan het logbestand niet worden geschreven, dan toont de pagina de
+  regels sinds de laatste start.
 
 ## Berichten en sjablonen
 

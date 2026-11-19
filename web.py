@@ -26,7 +26,7 @@ from messages import (
     validate_template,
 )
 from settings import Settings, token_expiry
-from state import ConnectionState
+from state import ConnectionState, MemoryLogHandler
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +84,15 @@ REVEAL_JS = (
     "var i=document.getElementById(b.dataset.target);var show=i.type==='password';"
     "i.type=show?'text':'password';b.classList.toggle('on',show);"
     "b.setAttribute('aria-pressed',show);var t=show?'Verberg token':'Toon token';b.title=t;b.setAttribute('aria-label',t);});});"
+)
+LIVE_JS = (
+    "(function(){var m=document.getElementById('live-messages'),l=document.getElementById('live-log'),"
+    "n=document.getElementById('live-note'),s=document.getElementById('live-status');"
+    "function tick(){fetch('/logs/data',{cache:'no-store'}).then(function(r){if(!r.ok)throw 0;return r.json();})"
+    ".then(function(d){m.textContent=d.messages;l.textContent=d.app;n.textContent=d.note;"
+    "s.textContent='Live, bijgewerkt '+new Date().toLocaleTimeString();s.className='pill ok';})"
+    ".catch(function(){s.textContent='Verbinding met de pagina verloren';s.className='pill error';});}"
+    "tick();setInterval(tick,2000);})();"
 )
 EYE_ICONS = (
     '<svg class="eye-open" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
@@ -308,23 +317,57 @@ async def templates_reset(request: web.Request) -> web.Response:
     raise web.HTTPSeeOther("/templates?msg=reset")
 
 
+def live_logs(app: web.Application) -> dict[str, str]:
+    """De teksten voor de pagina Logging; ook gebruikt voor de live-updates."""
+    app_lines = tail_lines(app["app_log"], APP_LOG_LINES)
+    note = "Nieuwste bovenaan."
+    memory: MemoryLogHandler | None = app["memory_log"]
+    if not app_lines and memory is not None and memory.lines:
+        app_lines = list(memory.lines)[-APP_LOG_LINES:]
+        note = (
+            "Het logbestand is niet beschikbaar (is de logmap schrijfbaar?); dit zijn de regels "
+            "sinds de laatste start. " + note
+        )
+    messages = [
+        f"{moment.astimezone().strftime('%H:%M:%S')}  {text}"
+        for moment, text in reversed(app["state"].messages)
+    ]
+    return {
+        "messages": "\n".join(messages) or "(nog geen wedstrijdberichten)",
+        "app": "\n".join(reversed(app_lines)) or "(nog geen logregels)",
+        "note": note,
+    }
+
+
+async def logs_data(request: web.Request) -> web.Response:
+    return web.json_response(live_logs(request.app))
+
+
 async def logs_page(request: web.Request) -> web.Response:
-    app_lines = tail_lines(request.app["app_log"], APP_LOG_LINES)
+    live = live_logs(request.app)
     raw_lines = tail_lines(request.app["raw_log"], RAW_LOG_ENTRIES, max_bytes=3_000_000)
-    app_text = "\n".join(reversed(app_lines)) or "(nog geen logregels)"
     raw_entries = [
         line if len(line) <= RAW_ENTRY_CHARS else f"{line[:RAW_ENTRY_CHARS]} ... [{len(line)} tekens, ingekort]"
         for line in reversed(raw_lines)
     ]
-    raw_text = "\n\n".join(raw_entries) or "(geen volledige berichten gevonden)"
+    raw_text = "\n\n".join(raw_entries) or (
+        "(geen ruwe berichten; staat het logbestand niet op schijf, dan is de logmap niet schrijfbaar)"
+    )
     body = (
-        f'<div class="card"><h2>Berichten en fouten</h2><p class="muted small">Nieuwste bovenaan; ververst elke 10 seconden.</p>'
-        f"<pre>{esc(app_text)}</pre></div>"
-        f'<div class="card"><h2>Ruwe websocketberichten</h2>'
-        f'<p class="muted small">De laatste {RAW_LOG_ENTRIES}, ingekort. Het volledige bestand staat in de logmap.</p>'
+        '<p><span id="live-status" class="pill warn">Live-weergave starten...</span> '
+        '<span class="muted small">Werkt vanzelf bij; zonder JavaScript herlaad je de pagina zelf.</span></p>'
+        '<div class="card"><h2>Wedstrijdberichten</h2>'
+        '<p class="muted small">De berichten die de app heeft gemaakt, sinds de laatste start. Nieuwste bovenaan.</p>'
+        f'<pre id="live-messages">{esc(live["messages"])}</pre></div>'
+        '<div class="card"><h2>Berichten en fouten</h2>'
+        f'<p id="live-note" class="muted small">{esc(live["note"])}</p>'
+        f'<pre id="live-log">{esc(live["app"])}</pre></div>'
+        '<div class="card"><h2>Ruwe websocketberichten</h2>'
+        f'<p class="muted small">De laatste {RAW_LOG_ENTRIES}, ingekort, bij het laden van de pagina. '
+        "Het volledige bestand staat in de logmap.</p>"
         f"<pre>{esc(raw_text)}</pre></div>"
     )
-    return page(request, "Logging", "/logs", body, refresh=10)
+    return page(request, "Logging", "/logs", body, script=LIVE_JS)
 
 
 async def health(request: web.Request) -> web.Response:
@@ -371,7 +414,7 @@ async def security(request: web.Request, handler):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["Content-Security-Policy"] = (
-        f"default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-{request['nonce']}'; "
+        f"default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-{request['nonce']}'; connect-src 'self'; "
         "form-action 'self'; frame-ancestors 'none'"
     )
     if isinstance(response, web.HTTPException):
@@ -386,12 +429,14 @@ def create_web_app(
     raw_log: Path,
     username: str,
     password: str,
+    memory_log: MemoryLogHandler | None = None,
 ) -> web.Application:
     app = web.Application(middlewares=[security], client_max_size=64 * 1024)
     app["settings"] = settings
     app["state"] = state
     app["app_log"] = app_log
     app["raw_log"] = raw_log
+    app["memory_log"] = memory_log
     app["username"] = username
     app["password"] = password
     app["csrf"] = secrets.token_urlsafe(32)
@@ -405,6 +450,7 @@ def create_web_app(
             web.post("/templates", templates_post),
             web.post("/templates/reset", templates_reset),
             web.get("/logs", logs_page),
+            web.get("/logs/data", logs_data),
         ]
     )
     return app
@@ -419,8 +465,9 @@ async def start_web(
     password: str,
     host: str,
     port: int,
+    memory_log: MemoryLogHandler | None = None,
 ) -> web.AppRunner:
-    app = create_web_app(settings, state, app_log, raw_log, username, password)
+    app = create_web_app(settings, state, app_log, raw_log, username, password, memory_log)
     runner = web.AppRunner(app, access_log=None)
     await runner.setup()
     await web.TCPSite(runner, host, port).start()

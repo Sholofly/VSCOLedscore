@@ -26,7 +26,7 @@ from websockets.exceptions import (
 
 from messages import DEFAULT_TEMPLATES, render_message
 from settings import Settings
-from state import ConnectionState, now as state_now
+from state import ConnectionState, MemoryLogHandler, now as state_now
 
 LOG_FORMAT = "%(asctime)s %(levelname)s %(message)s"
 logger = logging.getLogger(__name__)
@@ -86,10 +86,11 @@ def setup_raw_log(path: str) -> bool:
     return True
 
 
-def setup_logging(settings: Settings, app_log: Path) -> None:
-    """Log naar console en naar een roterend bestand (te lezen in de webomgeving)."""
+def setup_logging(settings: Settings, app_log: Path) -> MemoryLogHandler:
+    """Log naar console, een roterend bestand en het geheugen (voor de webomgeving)."""
     formatter = logging.Formatter(LOG_FORMAT)
-    handlers: list[logging.Handler] = [logging.StreamHandler()]
+    memory = MemoryLogHandler()
+    handlers: list[logging.Handler] = [logging.StreamHandler(), memory]
     file_error: OSError | None = None
     try:
         app_log.parent.mkdir(parents=True, exist_ok=True)
@@ -115,6 +116,7 @@ def setup_logging(settings: Settings, app_log: Path) -> None:
             app_log,
             file_error,
         )
+    return memory
 
 
 class MatchLifecycle:
@@ -386,10 +388,10 @@ class Connector:
             return False
         return True
 
-    @staticmethod
-    def _publish(events: list[str]) -> None:
+    def _publish(self, events: list[str]) -> None:
         for event in events:
             logger.info("%s", event)
+            self.state.add_message(event)
 
     async def run(self) -> None:
         delay = self.INITIAL_DELAY
@@ -524,7 +526,7 @@ async def main() -> None:
         read_setting(config, "WS_URL"),
         read_setting(config, "WS_TOKEN"),
     )
-    setup_logging(settings, log_dir / "app.log")
+    memory_log = setup_logging(settings, log_dir / "app.log")
     setup_raw_log(read_setting(config, "RAW_LOG_FILE", str(log_dir / "websocket-raw.log")))
 
     minutes = read_setting(config, "REGULAR_MINUTES", "90")
@@ -548,6 +550,7 @@ async def main() -> None:
             state,
             app_log=log_dir / "app.log",
             raw_log=Path(read_setting(config, "RAW_LOG_FILE", str(log_dir / "websocket-raw.log"))),
+            memory_log=memory_log,
             username=read_setting(config, "WEB_USER", "admin"),
             password=password,
             host=read_setting(config, "WEB_HOST", "127.0.0.1"),

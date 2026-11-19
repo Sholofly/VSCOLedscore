@@ -122,6 +122,10 @@ class ConnectorTests(unittest.IsolatedAsyncioTestCase):
         started = [l for l in logs.output if "De wedstrijd is begonnen!" in l]
         self.assertEqual(len(started), 1)
         self.assertGreaterEqual(self.state.messages_received, 3)
+        # Het bericht staat ook in de status, voor de live weergave in de webomgeving.
+        self.assertEqual(
+            [text for _, text in self.state.messages if "De wedstrijd is begonnen!" in text].__len__(), 1
+        )
 
     async def test_unreachable_server_keeps_retrying_with_backoff_and_hides_token(self):
         failing = FailingConnect()
