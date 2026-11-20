@@ -309,6 +309,9 @@ class PushWebTests(AioHTTPTestCase):
         resp = await self.client.post("/push/test", json={"endpoint": sub(1)["endpoint"]}, headers=self.headers())
         self.assertEqual(resp.status, 200)
         self.assertEqual(self.fake.sent[0][1]["url"], "/")
+        # Een tweede testmelding krijgt een ander label, anders toont Windows/Chrome geen nieuwe pop-up.
+        await self.client.post("/push/test", json={"endpoint": sub(1)["endpoint"]}, headers=self.headers())
+        self.assertNotEqual(self.fake.sent[0][1]["tag"], self.fake.sent[1][1]["tag"])
         unknown = await self.client.post("/push/test", json={"endpoint": sub(9)["endpoint"]}, headers=self.headers())
         self.assertEqual(unknown.status, 404)
         self.fake.fail = {sub(1)["endpoint"]: 500}

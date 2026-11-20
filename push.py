@@ -204,8 +204,11 @@ class PushSender:
 
     async def send_one(self, subscription: dict, text: str, key: str | None) -> str:
         """Verstuur één melding: "sent", "gone" (apparaat afgemeld, opgeruimd) of "failed"."""
+        # Een melding met hetzelfde label vervangt de vorige stil (geen nieuwe pop-up);
+        # daarom krijgt elke testmelding een eigen label.
+        tag = key or f"test-{time.time_ns()}"
         payload = json.dumps(
-            {"title": TITLE, "body": text, "url": f"/share/{key}" if key else "/", "tag": key or "test"},
+            {"title": TITLE, "body": text, "url": f"/share/{key}" if key else "/", "tag": tag},
             ensure_ascii=False,
         )
         try:
