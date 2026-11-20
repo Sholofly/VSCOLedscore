@@ -37,10 +37,13 @@ class ConnectionState:
     last_error_at: datetime | None = None
     next_retry_at: datetime | None = None
     # De laatste wedstrijdberichten (wat de app als melding heeft gegenereerd).
-    messages: deque[tuple[datetime, str]] = field(default_factory=lambda: deque(maxlen=100))
+    # Per bericht: (tijd, tekst, foto-URL of None).
+    messages: deque[tuple[datetime, str, str | None]] = field(
+        default_factory=lambda: deque(maxlen=100)
+    )
 
-    def add_message(self, text: str) -> None:
-        self.messages.append((now(), text))
+    def add_message(self, text: str, image: str | None = None) -> None:
+        self.messages.append((now(), str(text), image))
 
     def set(self, status: str, level: str = "warn", detail: str = "") -> None:
         self.status = status

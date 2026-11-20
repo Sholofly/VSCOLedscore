@@ -57,6 +57,17 @@ SAMPLE_CONTEXT: dict[str, Any] = {
     "blessuretijd": 2,
 }
 
+class Message(str):
+    """Berichttekst, eventueel met de URL van een foto; gedraagt zich verder als tekst."""
+
+    image: str | None
+
+    def __new__(cls, text: str, image: str | None = None) -> "Message":
+        message = super().__new__(cls, text)
+        message.image = image
+        return message
+
+
 MAX_TEMPLATE_LENGTH = 500
 _PLACEHOLDER = re.compile(r"\{(\w+)\}")
 _BASE = set(PLACEHOLDERS) - {"speler", "blessuretijd", "afsluiting"}

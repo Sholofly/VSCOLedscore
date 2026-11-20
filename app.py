@@ -24,7 +24,7 @@ from websockets.exceptions import (
     WebSocketException,
 )
 
-from messages import DEFAULT_TEMPLATES, render_message
+from messages import DEFAULT_TEMPLATES, Message, render_message
 from settings import Settings
 from state import ConnectionState, MemoryLogHandler, now as state_now
 
@@ -138,7 +138,8 @@ class MatchLifecycle:
         self.active = False
         self.rest = False
         self.score: tuple[Any, Any] | None = None
-        self.scorers: set[tuple[str, int, str]] = set()
+        # Doelpuntmakers: (kant, positie, naam) -> foto-URL (of None)
+        self.scorers: dict[tuple[str, int, str], str | None] = {}
         # Eigen doelpunt dat wacht op een doelpuntmaker: (context, deadline)
         self.pending_goal: tuple[dict[str, Any], float] | None = None
 
@@ -228,11 +229,15 @@ class MatchLifecycle:
                 events.extend(self.flush_pending())
                 self.pending_goal = (context, now + GOAL_WAIT_SECONDS)
             # Alleen de doelpuntmaker van de eigen (thuis)ploeg wordt gebruikt.
-            for side, _, name in sorted(scorers - self.scorers):
+            for key in sorted(scorers.keys() - self.scorers.keys()):
+                side, _, name = key
                 if side == "home" and self.pending_goal:
                     goal_context, _ = self.pending_goal
                     self.pending_goal = None
-                    events.extend(self._render("goal_home", {**goal_context, "speler": name}))
+                    events.extend(
+                        Message(text, scorers[key])
+                        for text in self._render("goal_home", {**goal_context, "speler": name})
+                    )
 
         self.started_at = started_at
         self.ended_at = ended_at
@@ -304,10 +309,13 @@ class MatchLifecycle:
         return int(seconds // 60) + 1
 
     @staticmethod
-    def _scorers(data: dict[str, Any]) -> set[tuple[str, int, str]]:
-        """Doelpuntmakers als (kant, positie, naam); de lijst kan null bevatten."""
+    def _scorers(data: dict[str, Any]) -> dict[tuple[str, int, str], str | None]:
+        """Doelpuntmakers als (kant, positie, naam) -> foto-URL; de lijst kan null bevatten.
+
+        De foto is `goalImage` (doelpuntfoto), anders `image` (pasfoto), alleen als http(s)-URL.
+        """
         raw = data.get("scorers")
-        result: set[tuple[str, int, str]] = set()
+        result: dict[tuple[str, int, str], str | None] = {}
         if not isinstance(raw, dict):
             return result
         for side in ("home", "away"):
@@ -318,7 +326,13 @@ class MatchLifecycle:
                 player = entry.get("player") if isinstance(entry, dict) else None
                 name = player.get("name") if isinstance(player, dict) else None
                 if name:
-                    result.add((side, index, str(name)))
+                    photo = None
+                    for field in ("goalImage", "image"):
+                        value = player.get(field)
+                        if isinstance(value, str) and value.startswith(("https://", "http://")):
+                            photo = value
+                            break
+                    result[(side, index, str(name))] = photo
         return result
 
     @staticmethod
@@ -391,7 +405,7 @@ class Connector:
     def _publish(self, events: list[str]) -> None:
         for event in events:
             logger.info("%s", event)
-            self.state.add_message(event)
+            self.state.add_message(event, getattr(event, "image", None))
 
     async def run(self) -> None:
         delay = self.INITIAL_DELAY

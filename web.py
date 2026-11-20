@@ -7,15 +7,17 @@ alle uitvoer wordt ge-escaped. Het token staat alleen op de pagina Verbinding
 """
 
 import asyncio
+import hashlib
 import hmac
 import html
 import logging
 import secrets
+from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
-from aiohttp import BasicAuth, web
+from aiohttp import BasicAuth, ClientSession, ClientTimeout, web
 
 from messages import (
     MAX_TEMPLATE_LENGTH,
@@ -30,6 +32,8 @@ from state import ConnectionState, MemoryLogHandler
 
 logger = logging.getLogger(__name__)
 
+MAX_PHOTO_BYTES = 10 * 1024 * 1024
+PHOTO_CACHE_SIZE = 30
 POST_URL = "https://x.com/intent/post?text="
 TWEET_LIMIT = 280
 APP_LOG_LINES = 300
@@ -77,6 +81,8 @@ pre{padding:10px;overflow:auto;white-space:pre-wrap;word-break:break-word;margin
 .tweets li:last-child{border:0}.msg-text{word-break:break-word}
 a.tweet{display:inline-block;margin:0 6px;padding:2px 10px;border:1px solid var(--accent);border-radius:99px;
 color:var(--accent);text-decoration:none;white-space:nowrap}a.tweet:hover{background:var(--accent);color:var(--card)}
+img.thumb{display:block;max-width:160px;max-height:160px;border-radius:6px;margin:6px 0}
+button.share{padding:2px 10px;border-radius:99px;font-size:.95rem}
 .pw{position:relative}.pw input{padding-right:48px}
 .reveal{position:absolute;right:4px;top:50%;transform:translateY(-50%);background:transparent;
 border:0;color:var(--muted);padding:8px;line-height:0;border-radius:6px}
@@ -91,15 +97,26 @@ REVEAL_JS = (
     "i.type=show?'text':'password';b.classList.toggle('on',show);"
     "b.setAttribute('aria-pressed',show);var t=show?'Verberg token':'Toon token';b.title=t;b.setAttribute('aria-label',t);});});"
 )
-LIVE_JS = (
-    "(function(){var m=document.getElementById('live-messages'),l=document.getElementById('live-log'),"
-    "n=document.getElementById('live-note'),s=document.getElementById('live-status');"
-    "function tick(){fetch('/logs/data',{cache:'no-store'}).then(function(r){if(!r.ok)throw 0;return r.json();})"
-    ".then(function(d){m.innerHTML=d.messages_html;l.textContent=d.app;n.textContent=d.note;"
-    "s.textContent='Live, bijgewerkt '+new Date().toLocaleTimeString();s.className='pill ok';})"
-    ".catch(function(){s.textContent='Verbinding met de pagina verloren';s.className='pill error';});}"
-    "tick();setInterval(tick,2000);})();"
-)
+LIVE_JS = """(function(){
+var m=document.getElementById('live-messages'),l=document.getElementById('live-log'),
+n=document.getElementById('live-note'),s=document.getElementById('live-status'),
+h=document.getElementById('share-hint'),last=m.innerHTML,files=new Map();
+var HINT='Delen met foto werkt alleen op een telefoon of tablet, en alleen als je deze pagina via HTTPS opent. '
++'Houd de foto ingedrukt om hem op te slaan en gebruik "Plaats op X".';
+function prefetch(){m.querySelectorAll('.share[data-photo]').forEach(function(b){var u=b.dataset.photo;
+if(files.has(u))return;files.set(u,null);fetch(u).then(function(r){if(!r.ok)throw 0;return r.blob();})
+.then(function(x){var e=(x.type.split('/')[1]||'jpg').split('+')[0];files.set(u,new File([x],'doelpunt.'+e,{type:x.type}));})
+.catch(function(){files.delete(u);});});}
+m.addEventListener('click',function(ev){var b=ev.target.closest('.share');if(!b)return;ev.preventDefault();
+var f=files.get(b.dataset.photo),data={text:b.dataset.text};if(f)data.files=[f];
+if(!f||!navigator.canShare||!navigator.canShare(data)){h.textContent=f?HINT:'De foto wordt nog geladen; probeer het zo opnieuw. '+HINT;return;}
+h.textContent='';navigator.share(data).catch(function(e){if(e&&e.name!=='AbortError')h.textContent=HINT;});});
+function tick(){fetch('/logs/data',{cache:'no-store'}).then(function(r){if(!r.ok)throw 0;return r.json();})
+.then(function(d){if(d.messages_html!==last){m.innerHTML=d.messages_html;last=d.messages_html;prefetch();}
+l.textContent=d.app;n.textContent=d.note;
+s.textContent='Live, bijgewerkt '+new Date().toLocaleTimeString();s.className='pill ok';})
+.catch(function(){s.textContent='Verbinding met de pagina verloren';s.className='pill error';});}
+prefetch();tick();setInterval(tick,2000);})();"""
 EYE_ICONS = (
     '<svg class="eye-open" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
     'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
@@ -338,11 +355,18 @@ def messages_html(messages: list[dict]) -> str:
             f'<span class="small {"fielderr" if too_long else "muted"}">'
             f'{item["length"]}/{TWEET_LIMIT}{" - te lang voor X" if too_long else ""}</span>'
         )
+        photo = ""
+        if item.get("photo"):
+            photo = (
+                f'<img class="thumb" src="{esc(item["photo"])}" alt="Foto van de doelpuntmaker" loading="lazy">'
+                f'<button type="button" class="share" data-photo="{esc(item["photo"])}" '
+                f'data-text="{esc(item["text"])}">Deel met foto</button>'
+            )
         items.append(
             f'<li><span class="muted">{esc(item["time"])}</span> '
             f'<span class="msg-text">{esc(item["text"])}</span> '
             f'<a class="tweet" href="{esc(item["url"])}" target="_blank" rel="noopener noreferrer">'
-            f"Plaats op X</a> {counter}</li>"
+            f"Plaats op X</a>{photo} {counter}</li>"
         )
     return f'<ul class="tweets">{"".join(items)}</ul>'
 
@@ -364,8 +388,9 @@ def live_logs(app: web.Application) -> dict:
             "text": text,
             "url": post_url(text),
             "length": len(text),
+            "photo": f"/photo/{photo_id(image)}" if image else None,
         }
-        for moment, text in reversed(app["state"].messages)
+        for moment, text, image in reversed(app["state"].messages)
     ]
     return {
         "messages": messages,
@@ -377,6 +402,52 @@ def live_logs(app: web.Application) -> dict:
 
 async def logs_data(request: web.Request) -> web.Response:
     return web.json_response(live_logs(request.app))
+
+
+def photo_id(url: str) -> str:
+    return hashlib.sha256(url.encode()).hexdigest()[:24]
+
+
+async def fetch_photo(url: str) -> tuple[bytes, str]:
+    """Haal een foto op bij het scorebord (de browser mag dat zelf niet, vanwege CORS)."""
+    timeout = ClientTimeout(total=15)
+    async with ClientSession(timeout=timeout) as session:
+        async with session.get(url, allow_redirects=True) as response:
+            content_type = response.headers.get("Content-Type", "").split(";")[0].strip()
+            if response.status != 200 or not content_type.startswith("image/"):
+                raise ValueError(f"geen foto (HTTP {response.status}, {content_type or 'onbekend type'})")
+            data = await response.content.read(MAX_PHOTO_BYTES + 1)
+            if len(data) > MAX_PHOTO_BYTES:
+                raise ValueError("foto is te groot")
+            return data, content_type
+
+
+async def photo(request: web.Request) -> web.Response:
+    """Geef een foto door, maar alleen een die in een van de wedstrijdberichten voorkomt.
+
+    Zo kan dit adres niet worden misbruikt om willekeurige URL's op te halen.
+    """
+    wanted = request.match_info["photo_id"]
+    known = {photo_id(image): image for _, _, image in request.app["state"].messages if image}
+    url = known.get(wanted)
+    if url is None:
+        raise web.HTTPNotFound(text="Onbekende foto")
+    cache: OrderedDict = request.app["photo_cache"]
+    if wanted not in cache:
+        try:
+            cache[wanted] = await request.app["fetch_photo"](url)
+        except Exception as error:  # netwerkfout, geen afbeelding, te groot
+            logger.warning("Foto van de doelpuntmaker niet op te halen: %s", error)
+            raise web.HTTPBadGateway(text="Foto niet op te halen")
+        while len(cache) > PHOTO_CACHE_SIZE:
+            cache.popitem(last=False)
+    cache.move_to_end(wanted)
+    data, content_type = cache[wanted]
+    return web.Response(
+        body=data,
+        content_type=content_type,
+        headers={"Cache-Control": "private, max-age=86400"},
+    )
 
 
 async def logs_page(request: web.Request) -> web.Response:
@@ -394,8 +465,10 @@ async def logs_page(request: web.Request) -> web.Response:
         '<span class="muted small">Werkt vanzelf bij; zonder JavaScript herlaad je de pagina zelf.</span></p>'
         '<div class="card"><h2>Wedstrijdberichten</h2>'
         '<p class="muted small">De berichten die de app heeft gemaakt, sinds de laatste start. Nieuwste bovenaan. '
-        '"Plaats op X" opent X met het bericht al ingevuld; je plaatst het daar zelf.</p>'
-        f'<div id="live-messages">{live["messages_html"]}</div></div>'
+        '"Plaats op X" opent X met het bericht al ingevuld; je plaatst het daar zelf. '
+        '"Deel met foto" opent het deelmenu van je telefoon met tekst en foto (alleen via HTTPS).</p>'
+        f'<div id="live-messages">{live["messages_html"]}</div>'
+        '<p id="share-hint" class="fielderr small" role="status"></p></div>'
         '<div class="card"><h2>Berichten en fouten</h2>'
         f'<p id="live-note" class="muted small">{esc(live["note"])}</p>'
         f'<pre id="live-log">{esc(live["app"])}</pre></div>'
@@ -447,12 +520,12 @@ async def security(request: web.Request, handler):
         response = await handler(request)
     except web.HTTPException as error:
         response = error
-    response.headers["Cache-Control"] = "no-store"
+    response.headers.setdefault("Cache-Control", "no-store")  # foto's zetten hun eigen waarde
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["Content-Security-Policy"] = (
-        f"default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-{request['nonce']}'; connect-src 'self'; "
-        "form-action 'self'; frame-ancestors 'none'"
+        f"default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-{request['nonce']}'; "
+        "connect-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'"
     )
     if isinstance(response, web.HTTPException):
         raise response
@@ -467,8 +540,11 @@ def create_web_app(
     username: str,
     password: str,
     memory_log: MemoryLogHandler | None = None,
+    photo_fetcher=None,
 ) -> web.Application:
     app = web.Application(middlewares=[security], client_max_size=64 * 1024)
+    app["fetch_photo"] = photo_fetcher or fetch_photo  # vervangbaar in tests
+    app["photo_cache"] = OrderedDict()
     app["settings"] = settings
     app["state"] = state
     app["app_log"] = app_log
@@ -488,6 +564,7 @@ def create_web_app(
             web.post("/templates/reset", templates_reset),
             web.get("/logs", logs_page),
             web.get("/logs/data", logs_data),
+            web.get("/photo/{photo_id:[0-9a-f]{24}}", photo),
         ]
     )
     return app

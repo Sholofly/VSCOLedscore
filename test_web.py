@@ -239,6 +239,76 @@ class WebTests(AioHTTPTestCase):
         self.assertIn("nog geen logregels", await resp.text())
 
 
+class PhotoTests(AioHTTPTestCase):
+    PHOTO = "https://api.example.test/media/files/speler_goal.jpg"
+
+    async def get_application(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        root = Path(folder.name)
+        self.state = ConnectionState()
+        self.fetched: list[str] = []
+
+        async def fake_fetch(url):
+            self.fetched.append(url)
+            if url.endswith("kapot.jpg"):
+                raise ValueError("geen foto")
+            return b"\xff\xd8jpegdata", "image/jpeg"
+
+        settings = Settings(root / "settings.json", "wss://example.test/", TOKEN)
+        return create_web_app(
+            settings, self.state, root / "app.log", root / "raw.log", "admin", "wachtwoord",
+            photo_fetcher=fake_fetch,
+        )
+
+    def photo_path(self, url):
+        from web import photo_id
+        return f"/photo/{photo_id(url)}"
+
+    async def test_message_with_photo_shows_thumbnail_and_share_button(self):
+        self.state.add_message("'12 DOELPUNT VSCO'61! Speler A! ...", self.PHOTO)
+        self.state.add_message("'30 Doelpunt VSW 1. ...")
+        resp = await self.client.get("/logs", headers=AUTH)
+        body = await resp.text()
+        self.assertEqual(body.count('class="share"'), 1)  # alleen bij het bericht met foto
+        self.assertIn(f'src="{self.photo_path(self.PHOTO)}"', body)
+        self.assertIn('data-text="&#x27;12 DOELPUNT VSCO&#x27;61! Speler A! ..."', body)
+        self.assertNotIn(self.PHOTO, body)  # de browser ziet alleen ons eigen adres
+        self.assertIn("img-src 'self'", resp.headers["Content-Security-Policy"])
+        self.assertIn("navigator.share", body)
+
+    async def test_known_photo_is_passed_through_and_cached(self):
+        self.state.add_message("doelpunt", self.PHOTO)
+        for _ in range(2):
+            resp = await self.client.get(self.photo_path(self.PHOTO), headers=AUTH)
+            self.assertEqual(resp.status, 200)
+            self.assertEqual(resp.content_type, "image/jpeg")
+            self.assertEqual(await resp.read(), b"\xff\xd8jpegdata")
+            self.assertIn("max-age", resp.headers["Cache-Control"])
+        self.assertEqual(self.fetched, [self.PHOTO])  # maar één keer opgehaald
+
+    async def test_only_photos_from_messages_can_be_fetched(self):
+        unknown = self.photo_path("https://evil.test/intern")
+        self.assertEqual((await self.client.get(unknown, headers=AUTH)).status, 404)
+        self.assertEqual((await self.client.get("/photo/niet-hex", headers=AUTH)).status, 404)
+        self.assertEqual(self.fetched, [])
+
+    async def test_photo_needs_login(self):
+        self.state.add_message("doelpunt", self.PHOTO)
+        self.assertEqual((await self.client.get(self.photo_path(self.PHOTO))).status, 401)
+        self.assertEqual(self.fetched, [])
+
+    async def test_failing_photo_gives_bad_gateway_and_is_not_cached(self):
+        broken = "https://api.example.test/media/kapot.jpg"
+        self.state.add_message("doelpunt", broken)
+        with self.assertLogs("web", level="WARNING"):
+            resp = await self.client.get(self.photo_path(broken), headers=AUTH)
+        self.assertEqual(resp.status, 502)
+        with self.assertLogs("web", level="WARNING"):
+            await self.client.get(self.photo_path(broken), headers=AUTH)
+        self.assertEqual(len(self.fetched), 2)
+
+
 class HelperTests(AioHTTPTestCase):
     async def get_application(self):
         from aiohttp import web

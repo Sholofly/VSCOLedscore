@@ -134,6 +134,15 @@ uitvoer wordt ge-escaped.
   die X (app of website) opent met het bericht al ingevuld. Je plaatst het daar
   zelf; de app heeft geen toegang tot je X-account nodig. Berichten boven 280
   tekens worden gemarkeerd.
+- **Deel met foto:** bij een eigen doelpunt met doelpuntmaker staat ook de foto
+  (`goalImage`, anders `image` uit de berichten) en een knop "Deel met foto". Die
+  opent het deelmenu van je telefoon met tekst en foto samen; kies daar X. Dat
+  werkt alleen op een telefoon of tablet en **alleen via HTTPS**, want browsers
+  staan delen anders niet toe. Op een Synology regel je HTTPS met de reverse
+  proxy en een certificaat in DSM. Zonder HTTPS toont de knop hoe je de foto
+  zelf opslaat. De app haalt de foto zelf op en geeft alleen foto's door die in
+  een wedstrijdbericht voorkomen. Let op: het gaat om foto's van spelers; of ze
+  op X mogen, bepaalt de club.
 
 ## Berichten en sjablonen
 

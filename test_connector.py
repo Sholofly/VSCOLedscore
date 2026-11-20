@@ -124,7 +124,7 @@ class ConnectorTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(self.state.messages_received, 3)
         # Het bericht staat ook in de status, voor de live weergave in de webomgeving.
         self.assertEqual(
-            [text for _, text in self.state.messages if "De wedstrijd is begonnen!" in text].__len__(), 1
+            [text for _, text, _ in self.state.messages if "De wedstrijd is begonnen!" in text].__len__(), 1
         )
 
     async def test_unreachable_server_keeps_retrying_with_backoff_and_hides_token(self):
@@ -224,7 +224,13 @@ class ConnectorTests(unittest.IsolatedAsyncioTestCase):
     async def test_stopping_always_ends_the_loop_even_while_the_server_keeps_closing(self):
         # Regressie: een stopsignaal tijdens het opruimen van een verbinding werd
         # ingeslikt, waarna de lus eindeloos bleef reconnecten (en docker stop hing).
+        import logging
         import random
+
+        # Afbreken midden in een handshake laat de testserver fouten loggen; dat is hier bedoeld.
+        server_logger = logging.getLogger("websockets.server")
+        self.addCleanup(server_logger.setLevel, server_logger.level)
+        server_logger.setLevel(logging.CRITICAL)
 
         async def handler(websocket):
             await websocket.send(status_message())

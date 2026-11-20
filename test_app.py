@@ -171,6 +171,32 @@ class GoalTests(unittest.TestCase):
         self.assertEqual(self.lifecycle.update(later, now=7), [])
         self.assertEqual(self.lifecycle.flush_expired(now=100), [])
 
+    def test_goal_message_carries_the_scorer_photo(self):
+        goal = self.payload(started_at=START, home_score=1, seconds=30)
+        goal["scoreboard_data"]["scorers"] = {
+            "home": [None, {"player": {
+                "name": "Speler A",
+                "image": "https://api.example.test/pas.jpg",
+                "goalImage": "https://api.example.test/goal.jpg",
+            }}],
+        }
+        events = self.lifecycle.update(goal, now=1)
+        self.assertEqual(events, [f"'1 DOELPUNT Home FC! Speler A! {trailer(1)}"])
+        self.assertEqual(events[0].image, "https://api.example.test/goal.jpg")
+
+    def test_photo_falls_back_to_passport_photo_and_ignores_non_urls(self):
+        for player, expected in (
+            ({"name": "A", "image": "https://x.test/pas.jpg"}, "https://x.test/pas.jpg"),
+            ({"name": "A", "goalImage": "javascript:alert(1)", "image": ""}, None),
+            ({"name": "A"}, None),
+        ):
+            lifecycle = MatchLifecycle()
+            lifecycle.update(self.payload(started_at=START), now=0)
+            goal = self.payload(started_at=START, home_score=1)
+            goal["scoreboard_data"]["scorers"] = {"home": [{"player": player}]}
+            (event,) = lifecycle.update(goal, now=1)
+            self.assertEqual(event.image, expected)
+
     def test_scorer_in_same_message_as_goal(self):
         goal = self.with_scorer(self.payload(started_at=START, home_score=1, seconds=30))
         self.assertEqual(
