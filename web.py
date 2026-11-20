@@ -1,9 +1,11 @@
-"""Webomgeving: status, URL en token, berichtsjablonen en logging.
+"""Webomgeving: status en berichten, URL en token, berichtsjablonen en logging.
 
-Beveiliging: alles (behalve /health) vereist inloggen met HTTP Basic, formulieren
-hebben een CSRF-token, scripts zijn alleen met een nonce per pagina toegestaan en
-alle uitvoer wordt ge-escaped. Het token staat alleen op de pagina Verbinding
-(verborgen tot je het oog-icoon gebruikt), nooit op de andere pagina's.
+Beveiliging: alles behalve de inlogpagina, /health en de app-bestanden (manifest,
+service worker, iconen) vereist inloggen. Dat gaat via de inlogpagina met een
+ondertekend sessiecookie (HttpOnly, SameSite=Lax, standaard 30 dagen), of voor
+scripts via HTTP Basic. Formulieren hebben een CSRF-token, scripts zijn alleen
+met een nonce per pagina toegestaan en alle uitvoer wordt ge-escaped. Het token
+staat alleen op de pagina Verbinding (verborgen tot je het oog-icoon gebruikt).
 """
 
 import asyncio
@@ -11,7 +13,9 @@ import hashlib
 import hmac
 import html
 import logging
+import os
 import secrets
+import time
 from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,6 +36,11 @@ from state import ConnectionState, MemoryLogHandler
 
 logger = logging.getLogger(__name__)
 
+STATIC_DIR = Path(__file__).with_name("static")
+SESSION_COOKIE = "vsco_session"
+DEFAULT_SESSION_DAYS = 30
+PUBLIC_PATHS = {"/health", "/login", "/manifest.webmanifest", "/sw.js"}
+THEME_COLOR = "#1f5fbf"
 MAX_PHOTO_BYTES = 10 * 1024 * 1024
 PHOTO_CACHE_SIZE = 30
 POST_URL = "https://x.com/intent/post?text="
@@ -58,6 +67,8 @@ header{background:var(--card);border-bottom:1px solid var(--line)}
 nav{max-width:60rem;margin:0 auto;padding:0 16px;display:flex;gap:4px;flex-wrap:wrap}
 nav a{padding:14px 12px;color:var(--muted);text-decoration:none;border-bottom:3px solid transparent}
 nav a.active{color:var(--text);border-color:var(--accent)}
+nav .logout{margin-left:auto;align-self:center}nav .logout button{padding:4px 12px;font-size:.9rem}
+.login{max-width:24rem}
 main{max-width:60rem;margin:0 auto;padding:16px}
 h1{font-size:1.4rem;margin:8px 0 16px}h2{font-size:1.1rem;margin:0 0 8px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:16px;margin-bottom:16px}
@@ -100,20 +111,22 @@ REVEAL_JS = (
 LIVE_JS = """(function(){
 var m=document.getElementById('live-messages'),l=document.getElementById('live-log'),
 n=document.getElementById('live-note'),s=document.getElementById('live-status'),
-h=document.getElementById('share-hint'),last=m.innerHTML,files=new Map();
+t=document.getElementById('live-table'),h=document.getElementById('share-hint'),
+last=m?m.innerHTML:'',lastTable=t?t.innerHTML:'',files=new Map();
 var HINT='Delen met foto werkt alleen op een telefoon of tablet, en alleen als je deze pagina via HTTPS opent. '
 +'Houd de foto ingedrukt om hem op te slaan en gebruik "Plaats op X".';
-function prefetch(){m.querySelectorAll('.share[data-photo]').forEach(function(b){var u=b.dataset.photo;
+function prefetch(){if(!m)return;m.querySelectorAll('.share[data-photo]').forEach(function(b){var u=b.dataset.photo;
 if(files.has(u))return;files.set(u,null);fetch(u).then(function(r){if(!r.ok)throw 0;return r.blob();})
 .then(function(x){var e=(x.type.split('/')[1]||'jpg').split('+')[0];files.set(u,new File([x],'doelpunt.'+e,{type:x.type}));})
 .catch(function(){files.delete(u);});});}
-m.addEventListener('click',function(ev){var b=ev.target.closest('.share');if(!b)return;ev.preventDefault();
+if(m)m.addEventListener('click',function(ev){var b=ev.target.closest('.share');if(!b)return;ev.preventDefault();
 var f=files.get(b.dataset.photo),data={text:b.dataset.text};if(f)data.files=[f];
 if(!f||!navigator.canShare||!navigator.canShare(data)){h.textContent=f?HINT:'De foto wordt nog geladen; probeer het zo opnieuw. '+HINT;return;}
 h.textContent='';navigator.share(data).catch(function(e){if(e&&e.name!=='AbortError')h.textContent=HINT;});});
 function tick(){fetch('/logs/data',{cache:'no-store'}).then(function(r){if(!r.ok)throw 0;return r.json();})
-.then(function(d){if(d.messages_html!==last){m.innerHTML=d.messages_html;last=d.messages_html;prefetch();}
-l.textContent=d.app;n.textContent=d.note;
+.then(function(d){if(m&&d.messages_html!==last){m.innerHTML=d.messages_html;last=d.messages_html;prefetch();}
+if(t&&d.status_html!==lastTable){t.innerHTML=d.status_html;lastTable=d.status_html;}
+if(l)l.textContent=d.app;if(n)n.textContent=d.note;
 s.textContent='Live, bijgewerkt '+new Date().toLocaleTimeString();s.className='pill ok';})
 .catch(function(){s.textContent='Verbinding met de pagina verloren';s.className='pill error';});}
 prefetch();tick();setInterval(tick,2000);})();"""
@@ -165,20 +178,46 @@ def tail_lines(path: Path, max_lines: int, max_bytes: int = 1_000_000) -> list[s
     return lines[-max_lines:]
 
 
+SW_REGISTER_JS = (
+    "if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js').catch(function(){});}"
+)
+APP_HEAD = (
+    '<link rel="manifest" href="/manifest.webmanifest">'
+    f'<meta name="theme-color" content="{THEME_COLOR}">'
+    '<link rel="icon" href="/static/icon-192.png" type="image/png">'
+    '<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">'
+    '<meta name="apple-mobile-web-app-capable" content="yes">'
+    '<meta name="mobile-web-app-capable" content="yes">'
+    '<meta name="apple-mobile-web-app-title" content="Scorebord">'
+)
+
+
 def page(
-    request: web.Request, title: str, active: str, body: str, refresh: int = 0, script: str = ""
+    request: web.Request,
+    title: str,
+    active: str,
+    body: str,
+    refresh: int = 0,
+    script: str = "",
+    show_nav: bool = True,
 ) -> web.Response:
     links = "".join(
         f'<a href="{path}"{" class=active" if path == active else ""}>{label}</a>'
         for path, label in NAV
     )
+    logout = (
+        '<form method="post" action="/logout" class="logout">'
+        f'{csrf_field(request)}<button type="submit" class="secondary">Uitloggen</button></form>'
+    )
+    nav = f"<header><nav>{links}{logout}</nav></header>" if show_nav else ""
     meta = f'<meta http-equiv="refresh" content="{refresh}">' if refresh else ""
-    script_tag = f'<script nonce="{esc(request["nonce"])}">{script}</script>' if script else ""
+    nonce = esc(request["nonce"])
+    script_tag = f'<script nonce="{nonce}">{SW_REGISTER_JS}{script}</script>'
     document = (
         '<!doctype html><html lang="nl"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
-        f"{meta}<title>{esc(title)} - VSCO scorebord</title><style>{CSS}</style></head>"
-        f"<body><header><nav>{links}</nav></header><main><h1>{esc(title)}</h1>{body}</main>{script_tag}</body></html>"
+        f"{APP_HEAD}{meta}<title>{esc(title)} - VSCO scorebord</title><style>{CSS}</style></head>"
+        f"<body>{nav}<main><h1>{esc(title)}</h1>{body}</main>{script_tag}</body></html>"
     )
     return web.Response(text=document, content_type="text/html")
 
@@ -198,9 +237,9 @@ def flash(request: web.Request) -> str:
 # --- pagina's ---------------------------------------------------------------
 
 
-async def status_page(request: web.Request) -> web.Response:
-    settings: Settings = request.app["settings"]
-    state: ConnectionState = request.app["state"]
+def status_table_html(app: web.Application) -> str:
+    settings: Settings = app["settings"]
+    state: ConnectionState = app["state"]
     expiry = token_expiry(settings.token) if settings.token else None
     if not settings.token:
         token_text = "niet ingesteld"
@@ -223,9 +262,23 @@ async def status_page(request: web.Request) -> web.Response:
         ("URL", f"<code>{esc(display_url(settings.url) or '-')}</code>"),
         ("Token", esc(token_text)),
     ]
-    table = "".join(f"<tr><th>{k}</th><td>{v}</td></tr>" for k, v in rows)
-    body = f'<div class="card"><table>{table}</table></div>'
-    return page(request, "Status", "/", body, refresh=10)
+    return "<table>" + "".join(f"<tr><th>{k}</th><td>{v}</td></tr>" for k, v in rows) + "</table>"
+
+
+async def status_page(request: web.Request) -> web.Response:
+    live = live_logs(request.app)
+    body = (
+        '<p><span id="live-status" class="pill warn">Live-weergave starten...</span> '
+        '<span class="muted small">Werkt vanzelf bij.</span></p>'
+        '<div class="card"><h2>Wedstrijdberichten</h2>'
+        '<p class="muted small">Sinds de laatste start, nieuwste bovenaan. '
+        '"Plaats op X" opent X met het bericht al ingevuld; je plaatst het daar zelf. '
+        '"Deel met foto" opent het deelmenu van je telefoon met tekst en foto (alleen via HTTPS).</p>'
+        f'<div id="live-messages">{live["messages_html"]}</div>'
+        '<p id="share-hint" class="fielderr small" role="status"></p></div>'
+        f'<div class="card"><h2>Verbinding</h2><div id="live-table">{live["status_html"]}</div></div>'
+    )
+    return page(request, "Status", "/", body, script=LIVE_JS)
 
 
 def settings_form(request: web.Request, url_error: str = "", token_error: str = "", url_value: str | None = None) -> str:
@@ -395,6 +448,7 @@ def live_logs(app: web.Application) -> dict:
     return {
         "messages": messages,
         "messages_html": messages_html(messages),
+        "status_html": status_table_html(app),
         "app": "\n".join(reversed(app_lines)) or "(nog geen logregels)",
         "note": note,
     }
@@ -462,13 +516,7 @@ async def logs_page(request: web.Request) -> web.Response:
     )
     body = (
         '<p><span id="live-status" class="pill warn">Live-weergave starten...</span> '
-        '<span class="muted small">Werkt vanzelf bij; zonder JavaScript herlaad je de pagina zelf.</span></p>'
-        '<div class="card"><h2>Wedstrijdberichten</h2>'
-        '<p class="muted small">De berichten die de app heeft gemaakt, sinds de laatste start. Nieuwste bovenaan. '
-        '"Plaats op X" opent X met het bericht al ingevuld; je plaatst het daar zelf. '
-        '"Deel met foto" opent het deelmenu van je telefoon met tekst en foto (alleen via HTTPS).</p>'
-        f'<div id="live-messages">{live["messages_html"]}</div>'
-        '<p id="share-hint" class="fielderr small" role="status"></p></div>'
+        '<span class="muted small">Werkt vanzelf bij. De wedstrijdberichten staan op de pagina Status.</span></p>'
         '<div class="card"><h2>Berichten en fouten</h2>'
         f'<p id="live-note" class="muted small">{esc(live["note"])}</p>'
         f'<pre id="live-log">{esc(live["app"])}</pre></div>'
@@ -484,10 +532,107 @@ async def health(request: web.Request) -> web.Response:
     return web.json_response({"status": "ok", "connection": request.app["state"].status})
 
 
-# --- beveiliging ------------------------------------------------------------
+# --- installeerbare webapp ---------------------------------------------------
+
+SERVICE_WORKER_JS = """// Service worker: maakt de app installeerbaar. Er wordt niets opgeslagen
+// (de pagina's bevatten persoonlijke gegevens); zonder netwerk volgt een melding.
+const OFFLINE = '<!doctype html><html lang="nl"><meta charset="utf-8">'
+  + '<meta name="viewport" content="width=device-width,initial-scale=1"><title>Geen verbinding</title>'
+  + '<body style="font:16px system-ui,sans-serif;padding:24px">'
+  + '<h1>Geen verbinding</h1><p>De scorebord-app is niet bereikbaar. Controleer je netwerk en probeer het opnieuw.</p>';
+self.addEventListener('install', () => self.skipWaiting());
+self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()));
+self.addEventListener('fetch', (event) => {
+  if (event.request.mode !== 'navigate') return;
+  event.respondWith(fetch(event.request).catch(() =>
+    new Response(OFFLINE, {headers: {'Content-Type': 'text/html; charset=utf-8'}})));
+});
+"""
+
+
+async def manifest(request: web.Request) -> web.Response:
+    data = {
+        "name": "VSCO Scorebord",
+        "short_name": "Scorebord",
+        "description": "Wedstrijdberichten van het VSCO-scorebord, klaar om te delen.",
+        "lang": "nl",
+        "start_url": "/",
+        "scope": "/",
+        "display": "standalone",
+        "background_color": "#14171b",
+        "theme_color": THEME_COLOR,
+        "icons": [
+            {"src": "/static/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+            {"src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+            {"src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"},
+        ],
+    }
+    return web.json_response(
+        data, content_type="application/manifest+json", headers={"Cache-Control": "public, max-age=3600"}
+    )
+
+
+async def service_worker(request: web.Request) -> web.Response:
+    return web.Response(
+        text=SERVICE_WORKER_JS,
+        content_type="application/javascript",
+        headers={"Cache-Control": "no-cache"},
+    )
+
+
+# --- inloggen ----------------------------------------------------------------
+
+
+def load_session_secret(path: Path) -> bytes:
+    """Geheime sleutel voor sessiecookies; bewaard, zodat je na een herstart ingelogd blijft."""
+    try:
+        secret = bytes.fromhex(path.read_text(encoding="utf-8").strip())
+        if len(secret) >= 32:
+            return secret
+    except (OSError, ValueError):
+        pass
+    secret = secrets.token_bytes(32)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(secret.hex(), encoding="utf-8")
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+    except OSError as error:
+        logger.warning("Sessiesleutel niet op te slaan (%s); na een herstart opnieuw inloggen", error)
+    return secret
+
+
+def _session_signature(app: web.Application, payload: str) -> str:
+    # De sleutel hangt ook af van gebruikersnaam en wachtwoord: wijzig je die,
+    # dan zijn alle bestaande sessies direct ongeldig.
+    key = hmac.new(
+        app["session_secret"], f"{app['username']}\0{app['password']}".encode(), hashlib.sha256
+    ).digest()
+    return hmac.new(key, payload.encode(), hashlib.sha256).hexdigest()
+
+
+def make_session(app: web.Application, now: float | None = None) -> str:
+    expires = int((time.time() if now is None else now) + app["session_days"] * 86400)
+    payload = str(expires)
+    return f"{payload}.{_session_signature(app, payload)}"
+
+
+def valid_session(app: web.Application, value: str | None, now: float | None = None) -> bool:
+    if not value or "." not in value:
+        return False
+    payload, signature = value.split(".", 1)
+    if not hmac.compare_digest(signature, _session_signature(app, payload)):
+        return False
+    try:
+        return int(payload) > (time.time() if now is None else now)
+    except ValueError:
+        return False
 
 
 def is_authorized(request: web.Request, username: str, password: str) -> bool:
+    """HTTP Basic, voor scripts en tools (de browser gebruikt de inlogpagina)."""
     header = request.headers.get("Authorization", "")
     try:
         auth = BasicAuth.decode(header, encoding="utf-8")
@@ -498,19 +643,96 @@ def is_authorized(request: web.Request, username: str, password: str) -> bool:
     return user_ok and pass_ok
 
 
+def is_https(request: web.Request) -> bool:
+    return request.secure or request.headers.get("X-Forwarded-Proto", "").lower() == "https"
+
+
+def safe_next(value: str | None) -> str:
+    """Alleen terugsturen naar een pagina van deze app (geen open redirect)."""
+    if not value or not value.startswith("/") or value.startswith("//") or "\\" in value:
+        return "/"
+    return value
+
+
+def login_form(request: web.Request, error: str = "", next_url: str = "/") -> str:
+    return (
+        '<div class="card login">'
+        f"{message_box(error, 'error')}"
+        '<form method="post" action="/login">'
+        f'{csrf_field(request)}<input type="hidden" name="next" value="{esc(next_url)}">'
+        '<label for="username">Gebruikersnaam</label>'
+        '<input type="text" id="username" name="username" required autocomplete="username" autocapitalize="none">'
+        '<label for="password">Wachtwoord</label>'
+        '<input type="password" id="password" name="password" required autocomplete="current-password">'
+        f'<p class="muted small">Je blijft {request.app["session_days"]} dagen ingelogd op dit apparaat.</p>'
+        '<div class="row"><button type="submit">Inloggen</button></div></form></div>'
+    )
+
+
+async def login_page(request: web.Request) -> web.Response:
+    if valid_session(request.app, request.cookies.get(SESSION_COOKIE)):
+        raise web.HTTPSeeOther(safe_next(request.query.get("next")))
+    form = login_form(request, next_url=safe_next(request.query.get("next")))
+    return page(request, "Inloggen", "", form, show_nav=False)
+
+
+async def login_post(request: web.Request) -> web.Response:
+    form = request["form"]
+    app = request.app
+    next_url = safe_next(str(form.get("next", "/")))
+    user_ok = hmac.compare_digest(str(form.get("username", "")).encode(), app["username"].encode())
+    pass_ok = hmac.compare_digest(str(form.get("password", "")).encode(), app["password"].encode())
+    if not (user_ok and pass_ok):
+        await asyncio.sleep(1)  # remt het raden van wachtwoorden
+        logger.warning("Mislukte inlogpoging in de webomgeving")
+        response = page(
+            request, "Inloggen", "", login_form(request, "Onjuiste gebruikersnaam of wachtwoord.", next_url),
+            show_nav=False,
+        )
+        response.set_status(401)
+        return response
+    response = web.HTTPSeeOther(next_url)
+    response.set_cookie(
+        SESSION_COOKIE,
+        make_session(app),
+        max_age=app["session_days"] * 86400,
+        path="/",
+        httponly=True,
+        samesite="Lax",
+        secure=is_https(request),
+    )
+    raise response
+
+
+async def logout_post(request: web.Request) -> web.Response:
+    response = web.HTTPSeeOther("/login")
+    response.del_cookie(SESSION_COOKIE, path="/")
+    raise response
+
+
+# --- beveiliging ------------------------------------------------------------
+
+
+def wants_html(request: web.Request) -> bool:
+    return request.method == "GET" and "text/html" in request.headers.get("Accept", "")
+
+
 @web.middleware
 async def security(request: web.Request, handler):
     if request.path == "/health":
         return await handler(request)
     app = request.app
     request["nonce"] = secrets.token_urlsafe(16)
-    if not is_authorized(request, app["username"], app["password"]):
-        await asyncio.sleep(1)  # remt het raden van wachtwoorden
-        return web.Response(
-            status=401,
-            text="Inloggen vereist",
-            headers={"WWW-Authenticate": 'Basic realm="VSCO scorebord", charset="UTF-8"'},
-        )
+    public = request.path in PUBLIC_PATHS or request.path.startswith("/static/")
+    if not public and not valid_session(app, request.cookies.get(SESSION_COOKIE)):
+        if "Authorization" in request.headers:
+            if not is_authorized(request, app["username"], app["password"]):
+                await asyncio.sleep(1)  # remt het raden van wachtwoorden
+                return web.Response(status=401, text="Onjuiste inloggegevens")
+        elif wants_html(request):
+            raise web.HTTPSeeOther(f"/login?{urlencode({'next': request.path_qs})}")
+        else:
+            return web.Response(status=401, text="Inloggen vereist")
     if request.method == "POST":
         form = await request.post()
         if not hmac.compare_digest(str(form.get("csrf", "")).encode(), app["csrf"].encode()):
@@ -520,12 +742,13 @@ async def security(request: web.Request, handler):
         response = await handler(request)
     except web.HTTPException as error:
         response = error
-    response.headers.setdefault("Cache-Control", "no-store")  # foto's zetten hun eigen waarde
+    response.headers.setdefault("Cache-Control", "no-store")  # foto's en app-bestanden zetten hun eigen
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["Content-Security-Policy"] = (
         f"default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-{request['nonce']}'; "
-        "connect-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'"
+        "connect-src 'self'; img-src 'self'; manifest-src 'self'; worker-src 'self'; "
+        "form-action 'self'; frame-ancestors 'none'"
     )
     if isinstance(response, web.HTTPException):
         raise response
@@ -541,6 +764,8 @@ def create_web_app(
     password: str,
     memory_log: MemoryLogHandler | None = None,
     photo_fetcher=None,
+    session_secret: bytes | None = None,
+    session_days: int = DEFAULT_SESSION_DAYS,
 ) -> web.Application:
     app = web.Application(middlewares=[security], client_max_size=64 * 1024)
     app["fetch_photo"] = photo_fetcher or fetch_photo  # vervangbaar in tests
@@ -553,9 +778,17 @@ def create_web_app(
     app["username"] = username
     app["password"] = password
     app["csrf"] = secrets.token_urlsafe(32)
+    app["session_secret"] = session_secret or secrets.token_bytes(32)
+    app["session_days"] = session_days
     app.add_routes(
         [
             web.get("/health", health),
+            web.get("/login", login_page),
+            web.post("/login", login_post),
+            web.post("/logout", logout_post),
+            web.get("/manifest.webmanifest", manifest),
+            web.get("/sw.js", service_worker),
+            web.static("/static", STATIC_DIR, append_version=False),
             web.get("/", status_page),
             web.get("/settings", settings_page),
             web.post("/settings", settings_post),
@@ -580,8 +813,13 @@ async def start_web(
     host: str,
     port: int,
     memory_log: MemoryLogHandler | None = None,
+    session_secret: bytes | None = None,
+    session_days: int = DEFAULT_SESSION_DAYS,
 ) -> web.AppRunner:
-    app = create_web_app(settings, state, app_log, raw_log, username, password, memory_log)
+    app = create_web_app(
+        settings, state, app_log, raw_log, username, password, memory_log,
+        session_secret=session_secret, session_days=session_days,
+    )
     runner = web.AppRunner(app, access_log=None)
     await runner.setup()
     await web.TCPSite(runner, host, port).start()

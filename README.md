@@ -112,12 +112,16 @@ met `Ctrl+C`.
 
 ## Webomgeving
 
-Inloggen met `WEB_USER` en `WEB_PASSWORD` (HTTP Basic). Formulieren hebben een
-CSRF-token, scripts zijn alleen met een nonce per pagina toegestaan en alle
-uitvoer wordt ge-escaped.
+Inloggen doe je op de inlogpagina met `WEB_USER` en `WEB_PASSWORD`. Je blijft
+daarna 30 dagen ingelogd op dat apparaat (`SESSION_DAYS` in `.env`), ook na een
+herstart of update. Wijzig je `WEB_USER` of `WEB_PASSWORD`, dan moet iedereen
+opnieuw inloggen. Uitloggen kan rechtsboven. Scripts en tools kunnen ook HTTP
+Basic gebruiken. Formulieren hebben een CSRF-token, scripts zijn alleen met een
+nonce per pagina toegestaan en alle uitvoer wordt ge-escaped.
 
-- **Status:** verbindingsstatus, laatste bericht en fout, volgende poging, URL
-  en of er een token is, met de vervaldatum als het een JWT met `exp` is.
+- **Status (startpagina):** de wedstrijdberichten met de knoppen "Plaats op X"
+  en "Deel met foto", en de verbindingsstatus (laatste bericht en fout, volgende
+  poging, URL, token met vervaldatum). Alles werkt zichzelf elke 2 seconden bij.
 - **Verbinding:** URL en token wijzigen. Het token staat verborgen in het veld
   en maak je zichtbaar met het oog-icoon. Het staat alleen op deze pagina en
   alleen na inloggen. Een wijziging bouwt de verbinding direct opnieuw op. De
@@ -126,11 +130,10 @@ uitvoer wordt ge-escaped.
   sjabloon betekent dat dat bericht niet wordt verstuurd. Wijzigingen werken
   direct, zonder herstart.
 - **Logging:** live bijgewerkt (elke 2 seconden, zonder de pagina te herladen):
-  de wedstrijdberichten die de app heeft gemaakt, de laatste 300 regels van
-  `app.log` (nieuwste bovenaan) en bij het laden de laatste 10 ruwe berichten,
+  de laatste 300 regels van `app.log` (nieuwste bovenaan) en bij het laden de laatste 10 ruwe berichten,
   ingekort. Kan het logbestand niet worden geschreven, dan toont de pagina de
   regels sinds de laatste start.
-- **Plaats op X:** bij elk wedstrijdbericht op de pagina Logging staat een knop
+- **Plaats op X:** bij elk wedstrijdbericht op de startpagina staat een knop
   die X (app of website) opent met het bericht al ingevuld. Je plaatst het daar
   zelf; de app heeft geen toegang tot je X-account nodig. Berichten boven 280
   tekens worden gemarkeerd.
@@ -143,6 +146,18 @@ uitvoer wordt ge-escaped.
   zelf opslaat. De app haalt de foto zelf op en geeft alleen foto's door die in
   een wedstrijdbericht voorkomen. Let op: het gaat om foto's van spelers; of ze
   op X mogen, bepaalt de club.
+
+## Installeren als app
+
+De webomgeving is een installeerbare webapp, met een eigen icoon en zonder
+adresbalk. Dat werkt alleen via **HTTPS** (net als "Deel met foto").
+
+- **iPhone/iPad (Safari):** open de pagina, tik op Deel en kies "Zet op beginscherm".
+- **Android (Chrome):** open de pagina, kies in het menu "App installeren" of
+  "Toevoegen aan startscherm".
+- **Pc (Chrome/Edge):** gebruik het installatie-icoon in de adresbalk.
+
+De app bewaart geen pagina's op je apparaat; zonder netwerk zie je een melding.
 
 ## Berichten en sjablonen
 

@@ -532,7 +532,7 @@ def read_setting(config: Mapping[str, str | None], name: str, default: str = "")
 
 
 async def main() -> None:
-    from web import start_web
+    from web import load_session_secret, start_web
 
     config = dotenv_values()
     data_dir = Path(read_setting(config, "DATA_DIR", "data"))
@@ -552,6 +552,9 @@ async def main() -> None:
     if not port.isdigit() or not 0 < int(port) < 65536:
         raise ValueError("WEB_PORT must be a port number between 1 and 65535.")
     password = read_setting(config, "WEB_PASSWORD")
+    session_days = read_setting(config, "SESSION_DAYS", "30")
+    if not session_days.isdigit() or not 1 <= int(session_days) <= 365:
+        raise ValueError("SESSION_DAYS must be a whole number between 1 and 365.")
     if not password:
         # Zonder webomgeving kan niets de configuratie herstellen: direct controleren.
         build_websocket_uri(settings.url, settings.token)
@@ -567,6 +570,8 @@ async def main() -> None:
             app_log=log_dir / "app.log",
             raw_log=Path(read_setting(config, "RAW_LOG_FILE", str(log_dir / "websocket-raw.log"))),
             memory_log=memory_log,
+            session_secret=load_session_secret(data_dir / "session_secret"),
+            session_days=int(session_days),
             username=read_setting(config, "WEB_USER", "admin"),
             password=password,
             host=read_setting(config, "WEB_HOST", "127.0.0.1"),
