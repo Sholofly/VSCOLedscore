@@ -25,6 +25,7 @@ Gebruikersdocumentatie staat in [README.md](README.md).
 | [app.py](app.py) | `MatchLifecycle` (berichten uit statusovergangen), `Connector` (verbinding, reconnect), logging, `main()` |
 | [messages.py](messages.py) | Sjablonen: standaardteksten, aanduidingen (`{minuut}` ...), validatie, `Message` (tekst + foto-URL) |
 | [settings.py](settings.py) | URL/token/sjablonen in `data/settings.json` (heeft voorrang op `.env`), atomair opgeslagen |
+| [push.py](push.py) | Web Push: VAPID-sleutels, aangemelde apparaten (alleen bekende pushdiensten), versturen, "startpagina open" |
 | [state.py](state.py) | `ConnectionState` (status + laatste wedstrijdberichten), `MemoryLogHandler` |
 | [web.py](web.py) | aiohttp-webomgeving: pagina's, inloggen/sessies, live-updates, foto-doorgifte, PWA |
 | `static/` | App-iconen (PNG) |
@@ -115,6 +116,12 @@ Elk bericht is de volledige status (~175 KB JSON). Relevant in `scoreboard_data`
 - Een CSS-escape zoals backslash-25B8 in een gewone Python-string wordt een
   octale escape (stuurteken). Gebruik geen backslash-escapes in CSS/JS-strings
   of gebruik een getekend alternatief; een test controleert op stuurtekens.
+- `VAPID_SUBJECT` moet `mailto:naam@domein` of `https://domein` **zonder pad** zijn,
+  anders weigert py_vapid elke melding (stil, alleen een waarschuwing in de log).
+  `validate_subject` controleert dit bij het starten; `RealEncryptionTests` test
+  de hele keten (versleuteling, VAPID, ontsleutelen) tegen een lokale pushdienst.
+- Bij pushmeldingen niet in de service worker stil overslaan: iOS kan dan de
+  aanmelding intrekken. "Startpagina open" wordt daarom server-side bijgehouden.
 - Patchen via een bash-heredoc maakt van backslash-n soms een echte regelovergang
   in de code. Schrijf zulke patches liever via de editor of een scriptbestand.
 - Zonder internet faalt een verbinding niet, er komt alleen niets meer door. Server:

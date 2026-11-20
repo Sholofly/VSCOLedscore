@@ -396,9 +396,12 @@ class Connector:
         state: ConnectionState,
         regular_minutes: int = 90,
         connect_func: Callable[..., Any] = connect,
+        notifier: Any = None,
     ) -> None:
         self.settings = settings
         self.state = state
+        # Krijgt elk wedstrijdbericht met notify(tekst, sleutel), bv. voor pushmeldingen.
+        self.notifier = notifier
         self.regular_minutes = regular_minutes
         self._connect = connect_func
         self._lifecycle: MatchLifecycle | None = None
@@ -428,7 +431,12 @@ class Connector:
     def _publish(self, events: list[str]) -> None:
         for event in events:
             logger.info("%s", event)
-            self.state.add_message(event, getattr(event, "image", None))
+            key = self.state.add_message(event, getattr(event, "image", None))
+            if self.notifier is not None:
+                try:
+                    self.notifier.notify(str(event), key)
+                except Exception:  # meldingen mogen de verbinding nooit stoppen
+                    logger.exception("Pushmelding kon niet worden ingepland")
 
     async def run(self) -> None:
         delay = self.INITIAL_DELAY
@@ -561,6 +569,7 @@ def read_setting(config: Mapping[str, str | None], name: str, default: str = "")
 
 
 async def main() -> None:
+    from push import DEFAULT_SUBJECT, PushSender, PushStore, load_vapid, validate_subject
     from web import load_session_secret, start_web
 
     config = dotenv_values()
@@ -590,7 +599,16 @@ async def main() -> None:
         logger.warning("WEB_PASSWORD is niet ingesteld: de webomgeving staat uit")
 
     state = ConnectionState()
-    connector = Connector(settings, state, int(minutes))
+    pusher = None
+    if password:  # aanmelden voor meldingen gaat via de webomgeving
+        vapid = load_vapid(data_dir / "vapid_private.pem")
+        pusher = PushSender(
+            PushStore(data_dir / "push_subscriptions.json"),
+            vapid,
+            # Pushdiensten eisen een contactadres: mailto:... of https://domein (zonder pad).
+            subject=validate_subject(vapid, read_setting(config, "VAPID_SUBJECT", DEFAULT_SUBJECT)),
+        )
+    connector = Connector(settings, state, int(minutes), notifier=pusher)
     web_runner = None
     if password:
         web_runner = await start_web(
@@ -600,6 +618,7 @@ async def main() -> None:
             raw_log=Path(read_setting(config, "RAW_LOG_FILE", str(log_dir / "websocket-raw.log"))),
             memory_log=memory_log,
             session_secret=load_session_secret(data_dir / "session_secret"),
+            push=pusher,
             session_days=int(session_days),
             username=read_setting(config, "WEB_USER", "admin"),
             password=password,

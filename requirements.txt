@@ -1,3 +1,4 @@
 python-dotenv==1.1.1
 websockets==15.0.1
 aiohttp==3.13.5
+pywebpush==2.5.0

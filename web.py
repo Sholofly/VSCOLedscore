@@ -33,7 +33,7 @@ from messages import (
     validate_template,
 )
 from settings import MAX_GOAL_WAIT_SECONDS, Settings, token_expiry
-from state import ConnectionState, MemoryLogHandler
+from state import ConnectionState, MatchMessage, MemoryLogHandler
 
 logger = logging.getLogger(__name__)
 
@@ -138,10 +138,13 @@ REVEAL_JS = (
     "b.setAttribute('aria-pressed',show);var t=show?'Verberg token':'Toon token';b.title=t;b.setAttribute('aria-label',t);});});"
 )
 LIVE_JS = """(function(){
-var m=document.getElementById('live-messages'),l=document.getElementById('live-log'),
+var live=document.getElementById('live-messages'),m=live||document.getElementById('one-message'),
+l=document.getElementById('live-log'),
 n=document.getElementById('live-note'),dot=document.querySelector('#led .led'),lt=document.getElementById('led-text'),
 t=document.getElementById('live-table'),
-last=m?m.innerHTML:'',lastTable=t?t.innerHTML:'',files=new Map(),photoOff=new Set();
+last=m?m.innerHTML:'',lastTable=t?t.innerHTML:'',files=new Map(),photoOff=new Set(),here=null;
+if(live&&'serviceWorker' in navigator&&window.PushManager){navigator.serviceWorker.ready
+.then(function(r){return r.pushManager.getSubscription();}).then(function(s){if(s)here=s.endpoint;}).catch(function(){});}
 var NO_MENU='Het deelmenu werkt alleen op een telefoon of tablet via HTTPS. X is geopend met de tekst';
 function prefetch(){if(!m)return;m.querySelectorAll('.msg-item[data-photo]').forEach(function(li){var u=li.dataset.photo;
 if(files.has(u))return;files.set(u,null);fetch(u).then(function(r){if(!r.ok)throw 0;return r.blob();})
@@ -169,11 +172,12 @@ function setLed(level,text){if(dot){dot.className='led '+level;lt.textContent=te
 function lost(){setLed('off',navigator.onLine===false?'geen internet':'app niet bereikbaar');}
 function tick(){if(busy)return;busy=true;
 var ctl=window.AbortController?new AbortController():null,timer=setTimeout(function(){if(ctl)ctl.abort();},4000);
-fetch('/logs/data',{cache:'no-store',signal:ctl?ctl.signal:undefined}).then(function(r){
+var hdr={};if(here&&!document.hidden)hdr['X-Push-Endpoint']=here;
+fetch('/logs/data',{cache:'no-store',signal:ctl?ctl.signal:undefined,headers:hdr}).then(function(r){
 if(r.status===401){location.href='/login?next='+encodeURIComponent(location.pathname);throw 0;}
 if(!r.ok)throw 0;return r.json();})
 .then(function(d){lastOk=Date.now();
-if(m&&d.messages_html!==last){m.innerHTML=d.messages_html;last=d.messages_html;restore();prefetch();}
+if(live&&d.messages_html!==last){m.innerHTML=d.messages_html;last=d.messages_html;restore();prefetch();}
 if(t&&d.status_html!==lastTable){t.innerHTML=d.status_html;lastTable=d.status_html;}
 if(l)l.textContent=d.app;if(n)n.textContent=d.note;setLed(d.led.level,d.led.status);})
 .catch(lost).then(function(){clearTimeout(timer);busy=false;});}
@@ -181,6 +185,34 @@ window.addEventListener('offline',lost);window.addEventListener('online',tick);
 document.addEventListener('visibilitychange',function(){if(!document.hidden)tick();});
 setInterval(function(){if(Date.now()-lastOk>6000)lost();},1000);
 prefetch();tick();setInterval(tick,2000);})();"""
+PUSH_JS = """(function(){var box=document.getElementById('push');if(!box)return;
+var btn=document.getElementById('push-toggle'),test=document.getElementById('push-test'),
+msg=document.getElementById('push-msg'),csrf=box.dataset.csrf;
+function say(x){msg.textContent=x;}
+if(!('serviceWorker' in navigator)||!window.PushManager||!window.Notification){btn.disabled=true;
+say('Meldingen zijn hier niet beschikbaar. Open de app via HTTPS; op een iPhone moet hij op je beginscherm staan (Deel, Zet op beginscherm).');return;}
+function key(x){x=x.replace(/-/g,'+').replace(/_/g,'/');var r=atob(x+'='.repeat((4-x.length%4)%4)),a=new Uint8Array(r.length);
+for(var i=0;i<r.length;i++)a[i]=r.charCodeAt(i);return a;}
+function post(url,body){return fetch(url,{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},
+body:JSON.stringify(body)}).then(function(r){if(!r.ok)throw new Error('Opslaan mislukt ('+r.status+').');return r;});}
+function current(){return navigator.serviceWorker.ready.then(function(r){return r.pushManager.getSubscription();});}
+function show(s){btn.textContent=s?'Meldingen uit':'Meldingen aan';btn.dataset.on=s?'1':'';test.hidden=!s;
+if(!s&&Notification.permission==='denied')say('Meldingen zijn geblokkeerd. Sta ze toe in de instellingen van je telefoon of browser.');}
+current().then(show).catch(function(){show(null);});
+btn.addEventListener('click',function(){btn.disabled=true;say('');var job;
+if(btn.dataset.on){job=current().then(function(s){if(!s)return;
+return post('/push/unsubscribe',{endpoint:s.endpoint}).catch(function(){}).then(function(){return s.unsubscribe();});})
+.then(function(){show(null);say('Meldingen staan uit op dit apparaat.');});}
+else{job=Notification.requestPermission().then(function(p){if(p!=='granted')throw new Error('Geen toestemming voor meldingen.');
+return fetch('/push/key',{cache:'no-store'}).then(function(r){if(!r.ok)throw new Error('Meldingen niet beschikbaar.');return r.json();});})
+.then(function(k){return navigator.serviceWorker.ready.then(function(r){
+return r.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:key(k.publicKey)});});})
+.then(function(s){return post('/push/subscribe',s.toJSON()).then(function(){show(s);
+say('Meldingen staan aan. Je krijgt er geen als de startpagina open is.');});});}
+job.catch(function(e){say(e&&e.message?e.message:String(e));}).then(function(){btn.disabled=false;});});
+test.addEventListener('click',function(){say('');current().then(function(s){if(!s)return;
+return post('/push/test',{endpoint:s.endpoint}).then(function(){say('Testmelding verstuurd.');});})
+.catch(function(e){say(e.message);});});})();"""
 EYE_ICONS = (
     '<svg class="eye-open" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
     'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
@@ -345,10 +377,39 @@ async def status_page(request: web.Request) -> web.Response:
     live = live_logs(request.app)
     body = (
         f'<div class="card"><div id="live-table">{live["status_html"]}</div></div>'
+        f"{push_card(request)}"
         '<form method="post" action="/logout" class="logout">'
         f'{csrf_field(request)}<button type="submit" class="secondary">Uitloggen</button></form>'
     )
-    return page(request, "Status", "/status", body, script=LIVE_JS, aside=led_html(request.app["state"]))
+    return page(
+        request, "Status", "/status", body, script=LIVE_JS + PUSH_JS, aside=led_html(request.app["state"])
+    )
+
+
+def push_card(request: web.Request) -> str:
+    if request.app["push"] is None:
+        return ""
+    return (
+        f'<div class="card" id="push" data-csrf="{esc(request.app["csrf"])}"><h2>Meldingen</h2>'
+        '<p class="muted small">Een melding bij elk wedstrijdbericht, ook als de app dicht is. Tik erop om het '
+        "bericht direct te delen. Zit je al op de startpagina, dan krijg je geen melding. Per apparaat aanzetten; "
+        "werkt via HTTPS, op een iPhone alleen als de app op je beginscherm staat.</p>"
+        '<div class="row"><button type="button" id="push-toggle">Meldingen aan</button>'
+        '<button type="button" id="push-test" class="secondary" hidden>Testmelding</button></div>'
+        '<p id="push-msg" class="small" role="status"></p></div>'
+    )
+
+
+async def share_page(request: web.Request) -> web.Response:
+    """Deelscherm voor één bericht (vanuit een pushmelding): direct op Delen tikken."""
+    message = request.app["state"].find_message(request.match_info["key"])
+    if message is None:  # bv. na een herstart van de app
+        raise web.HTTPSeeOther("/")
+    body = (
+        f'<div class="card"><div id="one-message">{messages_html([message_item(message)])}</div></div>'
+        '<p><a href="/">Alle berichten</a></p>'
+    )
+    return page(request, "Delen", "/", body, script=LIVE_JS, aside=led_html(request.app["state"]))
 
 
 def settings_form(
@@ -531,6 +592,18 @@ def messages_html(messages: list[dict]) -> str:
     return f'<ul class="msgs">{"".join(items)}</ul>'
 
 
+def message_item(message: MatchMessage) -> dict:
+    return {
+        "time": message.moment.astimezone().strftime("%H:%M:%S"),
+        "text": message.text,
+        "url": post_url(message.text),
+        "length": len(message.text),
+        "photo": f"/photo/{photo_id(message.image)}" if message.image else None,
+        # Vaste sleutel per bericht: foto-vinkje blijft staan, en de link in een pushmelding.
+        "key": message.key,
+    }
+
+
 def live_logs(app: web.Application) -> dict:
     """De teksten voor de pagina Logging; ook gebruikt voor de live-updates."""
     app_lines = tail_lines(app["app_log"], APP_LOG_LINES)
@@ -542,18 +615,7 @@ def live_logs(app: web.Application) -> dict:
             "Het logbestand is niet beschikbaar (is de logmap schrijfbaar?); dit zijn de regels "
             "sinds de laatste start. " + note
         )
-    messages = [
-        {
-            "time": moment.astimezone().strftime("%H:%M:%S"),
-            "text": text,
-            "url": post_url(text),
-            "length": len(text),
-            "photo": f"/photo/{photo_id(image)}" if image else None,
-            # Vaste sleutel per bericht, zodat het foto-vinkje een live-update overleeft.
-            "key": hashlib.sha256(f"{moment.isoformat()}|{text}".encode()).hexdigest()[:12],
-        }
-        for moment, text, image in reversed(app["state"].messages)
-    ]
+    messages = [message_item(m) for m in reversed(app["state"].messages)]
     return {
         "messages": messages,
         "messages_html": messages_html(messages),
@@ -565,7 +627,63 @@ def live_logs(app: web.Application) -> dict:
 
 
 async def logs_data(request: web.Request) -> web.Response:
+    push = request.app["push"]
+    endpoint = request.headers.get("X-Push-Endpoint")
+    if push is not None and endpoint:
+        push.store.mark_present(endpoint)  # startpagina open: geen pushmeldingen naar dit apparaat
     return web.json_response(live_logs(request.app))
+
+
+async def json_body(request: web.Request) -> dict:
+    try:
+        data = await request.json()
+    except ValueError:
+        raise web.HTTPBadRequest(text="Ongeldige gegevens.") from None
+    if not isinstance(data, dict):
+        raise web.HTTPBadRequest(text="Ongeldige gegevens.")
+    return data
+
+
+def require_push(request: web.Request):
+    push = request.app["push"]
+    if push is None:
+        raise web.HTTPNotFound(text="Meldingen zijn niet ingesteld.")
+    return push
+
+
+async def push_key(request: web.Request) -> web.Response:
+    return web.json_response({"publicKey": require_push(request).public_key})
+
+
+async def push_subscribe(request: web.Request) -> web.Response:
+    push = require_push(request)
+    try:
+        push.store.add(await json_body(request))
+    except ValueError as error:
+        raise web.HTTPBadRequest(text=str(error)) from None
+    logger.info("Apparaat aangemeld voor meldingen (%s in totaal)", len(push.store.subscriptions))
+    return web.json_response({"ok": True})
+
+
+async def push_unsubscribe(request: web.Request) -> web.Response:
+    push = require_push(request)
+    endpoint = (await json_body(request)).get("endpoint")
+    if isinstance(endpoint, str) and push.store.remove(endpoint):
+        logger.info("Apparaat afgemeld voor meldingen")
+    return web.json_response({"ok": True})
+
+
+async def push_test(request: web.Request) -> web.Response:
+    push = require_push(request)
+    subscription = push.store.find(str((await json_body(request)).get("endpoint", "")))
+    if subscription is None:
+        raise web.HTTPNotFound(text="Dit apparaat is niet aangemeld.")
+    result = await push.send_one(subscription, "Testmelding: meldingen werken.", None)
+    if result == "gone":
+        raise web.HTTPGone(text="Dit apparaat is afgemeld.")
+    if result == "failed":
+        raise web.HTTPBadGateway(text="Testmelding niet afgeleverd; zie de logging.")
+    return web.json_response({"ok": True})
 
 
 def photo_id(url: str) -> str:
@@ -603,7 +721,7 @@ async def photo(request: web.Request) -> web.Response:
     Zo kan dit adres niet worden misbruikt om willekeurige URL's op te halen.
     """
     wanted = request.match_info["photo_id"]
-    known = {photo_id(image): image for _, _, image in request.app["state"].messages if image}
+    known = {photo_id(m.image): m.image for m in request.app["state"].messages if m.image}
     url = known.get(wanted)
     if url is None:
         raise web.HTTPNotFound(text="Onbekende foto")
@@ -727,6 +845,25 @@ self.addEventListener('fetch', (event) => {
   if (event.request.mode !== 'navigate') return;
   event.respondWith(fetch(event.request).catch(() =>
     new Response(OFFLINE, {headers: {'Content-Type': 'text/html; charset=utf-8'}})));
+});
+// Pushmelding: tonen; bij tikken het deelscherm van dat bericht openen.
+self.addEventListener('push', (event) => {
+  let data = {};
+  try { data = event.data ? event.data.json() : {}; } catch (e) { data = {body: event.data ? event.data.text() : ''}; }
+  event.waitUntil(self.registration.showNotification(data.title || 'VSCO Scorebord', {
+    body: data.body || '', tag: data.tag || undefined, icon: '/static/icon-192.png',
+    badge: '/static/icon-192.png', data: {url: data.url || '/'},
+  }));
+});
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const url = new URL((event.notification.data && event.notification.data.url) || '/', self.location.origin).href;
+  event.waitUntil(self.clients.matchAll({type: 'window', includeUncontrolled: true}).then((list) => {
+    for (const client of list) {
+      if ('navigate' in client) return client.focus().then(() => client.navigate(url));
+    }
+    return self.clients.openWindow(url);
+  }));
 });
 """
 
@@ -916,7 +1053,8 @@ async def security(request: web.Request, handler):
             return web.Response(status=401, text="Inloggen vereist")
     if request.method == "POST":
         form = await request.post()
-        if not hmac.compare_digest(str(form.get("csrf", "")).encode(), app["csrf"].encode()):
+        token = str(form.get("csrf", "") or request.headers.get("X-CSRF-Token", ""))
+        if not hmac.compare_digest(token.encode(), app["csrf"].encode()):
             return web.Response(status=403, text="Ongeldig formulier; laad de pagina opnieuw.")
         request["form"] = form
     try:
@@ -947,8 +1085,10 @@ def create_web_app(
     photo_fetcher=None,
     session_secret: bytes | None = None,
     session_days: int = DEFAULT_SESSION_DAYS,
+    push=None,
 ) -> web.Application:
     app = web.Application(middlewares=[security], client_max_size=64 * 1024)
+    app["push"] = push  # PushSender, of None als meldingen uit staan
     app["fetch_photo"] = photo_fetcher or fetch_photo  # vervangbaar in tests
     app["photo_cache"] = OrderedDict()
     app["settings"] = settings
@@ -980,6 +1120,11 @@ def create_web_app(
             web.get("/logs", logs_page),
             web.get("/logs/data", logs_data),
             web.get("/photo/{photo_id:[0-9a-f]{24}}", photo),
+            web.get("/share/{key:[0-9a-f]{12}}", share_page),
+            web.get("/push/key", push_key),
+            web.post("/push/subscribe", push_subscribe),
+            web.post("/push/unsubscribe", push_unsubscribe),
+            web.post("/push/test", push_test),
         ]
     )
     return app
@@ -997,10 +1142,11 @@ async def start_web(
     memory_log: MemoryLogHandler | None = None,
     session_secret: bytes | None = None,
     session_days: int = DEFAULT_SESSION_DAYS,
+    push=None,
 ) -> web.AppRunner:
     app = create_web_app(
         settings, state, app_log, raw_log, username, password, memory_log,
-        session_secret=session_secret, session_days=session_days,
+        session_secret=session_secret, session_days=session_days, push=push,
     )
     runner = web.AppRunner(app, access_log=None)
     await runner.setup()

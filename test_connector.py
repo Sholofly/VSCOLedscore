@@ -164,7 +164,7 @@ class ConnectorTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(self.state.messages_received, 3)
         # Het bericht staat ook in de status, voor de live weergave in de webomgeving.
         self.assertEqual(
-            [text for _, text, _ in self.state.messages if "De wedstrijd is begonnen!" in text].__len__(), 1
+            [m for m in self.state.messages if "De wedstrijd is begonnen!" in m.text].__len__(), 1
         )
 
     async def test_unreachable_server_keeps_retrying_with_backoff_and_hides_token(self):

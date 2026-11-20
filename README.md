@@ -156,6 +156,24 @@ toegestaan en alle uitvoer wordt ge-escaped.
   sponsors en teams staan alleen in het logbestand. Kan het logbestand niet
   worden geschreven, dan toont de pagina de regels sinds de laatste start.
 
+## Pushmeldingen
+
+Bij elk wedstrijdbericht kan je telefoon een melding krijgen, ook als de app
+dicht is. Tik je erop, dan opent een **deelscherm** met alleen dat bericht (en
+de foto): tik op Delen. Zit je al op de startpagina, dan krijg je geen melding,
+want daar zie je het bericht al.
+
+- Aanzetten per apparaat op de pagina **Status**, kaart Meldingen (met een knop
+  voor een testmelding). Werkt alleen via **HTTPS**; op een iPhone alleen als de
+  app op je beginscherm staat (iOS 16.4 of nieuwer).
+- De melding gaat versleuteld via de pushdienst van je telefoon (Apple, Google,
+  Mozilla of Microsoft). De sleutels en aanmeldingen staan in het datavolume
+  (`vapid_private.pem`, `push_subscriptions.json`); afgemelde apparaten worden
+  automatisch opgeruimd. Gaat de sleutel verloren, zet meldingen dan opnieuw aan.
+- Pushdiensten vragen een contactadres (`VAPID_SUBJECT` in `.env`,
+  standaard `https://github.com`); zet daar eventueel `mailto:jouw@adres` neer.
+  Alleen de pushdiensten zien het.
+
 ## Installeren als app
 
 De webomgeving is een installeerbare webapp, met een eigen icoon en zonder

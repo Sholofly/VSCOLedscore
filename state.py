@@ -1,13 +1,22 @@
 """Verbindingsstatus, door de verbinding bijgewerkt en door de webomgeving getoond."""
 
+import hashlib
 import logging
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import NamedTuple
 
 
 def now() -> datetime:
     return datetime.now().astimezone()
+
+
+class MatchMessage(NamedTuple):
+    moment: datetime
+    text: str
+    image: str | None
+    key: str  # vast per bericht: voor het foto-vinkje en de link in een pushmelding
 
 
 class MemoryLogHandler(logging.Handler):
@@ -38,12 +47,16 @@ class ConnectionState:
     next_retry_at: datetime | None = None
     # De laatste wedstrijdberichten (wat de app als melding heeft gegenereerd).
     # Per bericht: (tijd, tekst, foto-URL of None).
-    messages: deque[tuple[datetime, str, str | None]] = field(
-        default_factory=lambda: deque(maxlen=100)
-    )
+    messages: deque[MatchMessage] = field(default_factory=lambda: deque(maxlen=100))
 
-    def add_message(self, text: str, image: str | None = None) -> None:
-        self.messages.append((now(), str(text), image))
+    def add_message(self, text: str, image: str | None = None) -> str:
+        moment = now()
+        key = hashlib.sha256(f"{moment.isoformat()}|{text}".encode()).hexdigest()[:12]
+        self.messages.append(MatchMessage(moment, str(text), image, key))
+        return key
+
+    def find_message(self, key: str) -> MatchMessage | None:
+        return next((m for m in self.messages if m.key == key), None)
 
     def set(self, status: str, level: str = "warn", detail: str = "") -> None:
         self.status = status
