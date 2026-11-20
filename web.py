@@ -437,7 +437,7 @@ def templates_form(request: web.Request, values: dict[str, str], errors: dict[st
     for key, (label, _) in TEMPLATE_INFO.items():
         context = dict(SAMPLE_CONTEXT)
         if key.startswith("end"):
-            context["minuut"] = "90 + 2"
+            context["minuut"] = "90+2"
         preview = render_message(values, key, context)
         error = f'<div class="fielderr">{esc(errors[key])}</div>' if key in errors else ""
         fields.append(

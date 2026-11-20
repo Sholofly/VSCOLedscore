@@ -70,8 +70,8 @@ Elk bericht is de volledige status (~175 KB JSON). Relevant in `scoreboard_data`
   Verbinding, `Settings.goal_wait_seconds`; per doelpunt opgevraagd) en
   wordt dan als één bericht gemeld; doelpunt tegenstander direct.
 - Stand omlaag = correctie: wachtend doelpunt vervalt, geen melding.
-- Minuten met blessuretijd per helft: eerste helft boven 45 wordt `45 + n`, tweede
-  helft boven 90 wordt `90 + n` (`_minute_label`, op basis van `REGULAR_MINUTES`).
+- Minuten met blessuretijd per helft: eerste helft boven 45 wordt `45+n`, tweede
+  helft boven 90 wordt `90+n` (`_minute_label`, op basis van `REGULAR_MINUTES`).
 - Bij een reconnect blijft de wedstrijdstatus bewaard; bij een andere URL niet.
 - `AFGELOPEN!` in hoofdletters alleen bij winst; blessuretijd = minuten boven
   `REGULAR_MINUTES`.

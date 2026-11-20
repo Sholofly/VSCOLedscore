@@ -276,11 +276,11 @@ class MatchLifecycle:
         if isinstance(seconds, bool) or not isinstance(seconds, (int, float)):
             minute = "?"
         else:
-            played = math.ceil(seconds / 60)  # 90:00 is 90, 92:01 is 90 + 3
+            played = math.ceil(seconds / 60)  # 90:00 is 90, 92:01 is 90+3
             extra = max(0, played - self.regular_minutes)
             minute = str(min(played, self.regular_minutes))
             if extra:
-                minute += f" + {extra}"
+                minute += f"+{extra}"
         home_score, away_score = score
         won = (
             isinstance(home_score, int)
@@ -311,15 +311,15 @@ class MatchLifecycle:
         return int(seconds // 60) + 1
 
     def _minute_label(self, data: dict[str, Any]) -> str:
-        """Minuut als tekst, met blessuretijd per helft: 45:30 in de eerste helft is "45 + 1",
-        in de tweede helft is na 90:00 "90 + 1" (zoals bij het eindbericht)."""
+        """Minuut als tekst, met blessuretijd per helft: 45:30 in de eerste helft is "45+1",
+        in de tweede helft is na 90:00 "90+1" (zoals bij het eindbericht)."""
         minute = self._minute(data)
         if minute is None:
             return "?"
         period = data.get("period")
         second_half = isinstance(period, int) and not isinstance(period, bool) and period >= 1
         limit = self.regular_minutes if second_half else self.regular_minutes // 2
-        return f"{limit} + {minute - limit}" if minute > limit else str(minute)
+        return f"{limit}+{minute - limit}" if minute > limit else str(minute)
 
     @staticmethod
     def _scorers(data: dict[str, Any]) -> dict[tuple[str, int, str], str | None]:

@@ -102,7 +102,7 @@ class MatchLifecycleTests(unittest.TestCase):
             started_at=START, ended_at=END, home_score=1, seconds=2760 + 1, period=1
         )
         self.assertEqual(
-            self.lifecycle.update(ended), [f"'90 + 2 AFGELOPEN! {trailer(1)}"]
+            self.lifecycle.update(ended), [f"'90+2 AFGELOPEN! {trailer(1)}"]
         )
 
     def test_win_is_reported_in_capitals_once(self):
@@ -121,7 +121,7 @@ class MatchLifecycleTests(unittest.TestCase):
             started_at=START, ended_at=END, home_score=2, away_score=1, seconds=5461
         )
         self.assertEqual(
-            self.lifecycle.update(ended), [f"'90 + 2 AFGELOPEN! {trailer(2, 1)}"]
+            self.lifecycle.update(ended), [f"'90+2 AFGELOPEN! {trailer(2, 1)}"]
         )
 
     def test_draw_and_loss_are_not_in_capitals(self):
@@ -139,7 +139,7 @@ class MatchLifecycleTests(unittest.TestCase):
         lifecycle = MatchLifecycle(regular_minutes=60)
         lifecycle.update(self.payload(started_at=START, home_score=1))
         ended = self.payload(started_at=START, ended_at=END, home_score=1, seconds=3661)
-        self.assertEqual(lifecycle.update(ended), [f"'60 + 2 AFGELOPEN! {trailer(1)}"])
+        self.assertEqual(lifecycle.update(ended), [f"'60+2 AFGELOPEN! {trailer(1)}"])
 
 
 class GoalTests(unittest.TestCase):
@@ -269,7 +269,7 @@ class GoalTests(unittest.TestCase):
 
     def test_stoppage_time_goals_show_per_half(self):
         # Eerste helft: na 45:00 is het blessuretijd van de eerste helft, niet minuut 46.
-        for seconds, expected in ((2699, "45"), (2700, "45 + 1"), (2730, "45 + 1"), (2820, "45 + 3")):
+        for seconds, expected in ((2699, "45"), (2700, "45+1"), (2730, "45+1"), (2820, "45+3")):
             lifecycle = MatchLifecycle()
             lifecycle.update(self.payload(started_at=START, seconds=seconds), now=0)
             (event,) = lifecycle.update(
@@ -277,7 +277,7 @@ class GoalTests(unittest.TestCase):
             )
             self.assertTrue(event.startswith(f"'{expected} Doelpunt"), (seconds, event))
         # Tweede helft: time begint opnieuw bij 0; 45:00 in de helft = 90:00 totaal.
-        for seconds, expected in ((60, "47"), (2699, "90"), (2700, "90 + 1"), (2790, "90 + 2")):
+        for seconds, expected in ((60, "47"), (2699, "90"), (2700, "90+1"), (2790, "90+2")):
             lifecycle = MatchLifecycle()
             lifecycle.update(self.payload(started_at=START, seconds=seconds, period=1), now=0)
             (event,) = lifecycle.update(
@@ -289,7 +289,7 @@ class GoalTests(unittest.TestCase):
         lifecycle = MatchLifecycle(regular_minutes=60)  # bv. jeugd: 2 x 30
         lifecycle.update(self.payload(started_at=START, seconds=1830), now=0)
         (event,) = lifecycle.update(self.payload(started_at=START, away_score=1, seconds=1830), now=1)
-        self.assertTrue(event.startswith("'30 + 1 Doelpunt"), event)
+        self.assertTrue(event.startswith("'30+1 Doelpunt"), event)
 
     def test_score_correction_cancels_pending_goal_and_is_not_a_goal(self):
         self.lifecycle.update(self.payload(started_at=START, home_score=1), now=0)

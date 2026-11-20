@@ -6,7 +6,7 @@ from typing import Any
 
 # Eén regel per aanduiding: wat je in een sjabloon als {naam} kunt gebruiken.
 PLACEHOLDERS: dict[str, str] = {
-    "minuut": "Speelminuut, bij het einde ook met blessuretijd (bv. 90 + 2)",
+    "minuut": "Speelminuut, bij het einde ook met blessuretijd (bv. 90+2)",
     "thuis": "Naam van de thuisploeg (eigen club)",
     "uit": "Naam van de uitploeg (tegenstander)",
     "tegenstander": "Hetzelfde als {uit}",
