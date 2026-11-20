@@ -83,6 +83,16 @@ details.intro summary{cursor:pointer;min-height:32px;display:flex;align-items:ce
 border-bottom:2px solid currentColor;transform:rotate(-45deg);transition:transform .15s}
 details.intro[open] summary::before{transform:rotate(45deg)}
 details.intro p{margin:4px 0 0}
+details.block{background:var(--card);border:1px solid var(--line);border-radius:8px;margin-bottom:12px}
+details.block>summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:10px;min-height:52px;
+padding:0 16px;font-weight:600;font-size:1.05rem}
+details.block>summary::-webkit-details-marker{display:none}
+details.block>summary::before{content:"";width:7px;height:7px;border-right:2px solid currentColor;
+border-bottom:2px solid currentColor;transform:rotate(-45deg);transition:transform .15s}
+details.block[open]>summary::before{transform:rotate(45deg)}
+.block-body{padding:0 16px 16px}.block-body h3{font-size:1rem;margin:16px 0 4px}
+.block-body h3:first-child{margin-top:0}.block-body form+h3{margin-top:24px}
+.note{border-left:3px solid var(--warn);padding:6px 10px;margin:0 0 12px;color:var(--muted);font-size:.92rem}
 details.raw{border-bottom:1px solid var(--line);padding:8px 0}details.raw:last-child{border-bottom:0}
 details.raw summary{cursor:pointer;word-break:break-word}details.raw pre{margin-top:8px;max-height:60vh}input.num{max-width:8rem}
 main{max-width:60rem;margin:0 auto;padding:16px}
@@ -224,13 +234,16 @@ EYE_ICONS = (
     '<path d="M14.12 14.12A3 3 0 1 1 9.88 9.88"/><path d="M1 1l22 22"/></svg>'
 )
 
-NAV = (
-    ("/", "Berichten"),
-    ("/status", "Status"),
-    ("/settings", "Verbinding"),
-    ("/templates", "Sjablonen"),
-    ("/logs", "Logging"),
-)
+ROLE_ADMIN = "admin"  # beheerder: alles, ook de app-instellingen
+ROLE_USER = "user"  # gebruiker: berichten delen en eigen instellingen
+ROLE_LABELS = {ROLE_ADMIN: "beheerder", ROLE_USER: "gebruiker"}
+# Alleen voor de beheerder (ook de oude adressen, die naar /app doorsturen).
+ADMIN_PATHS = {"/app", "/status", "/settings", "/templates", "/templates/reset", "/logs"}
+
+
+def nav_items(role: str | None) -> tuple[tuple[str, str], ...]:
+    items = (("/", "Berichten"), ("/me", "Mijn instellingen"))
+    return items + (("/app", "App"),) if role == ROLE_ADMIN else items
 
 
 def esc(value: object) -> str:
@@ -293,7 +306,7 @@ def page(
 ) -> web.Response:
     links = "".join(
         f'<a href="{path}"{" class=active" if path == active else ""}>{label}</a>'
-        for path, label in NAV
+        for path, label in nav_items(request.get("role"))
     )
     nav = f"<header><nav>{links}</nav></header>" if show_nav else ""
     meta = f'<meta http-equiv="refresh" content="{refresh}">' if refresh else ""
@@ -352,13 +365,16 @@ def status_table_html(app: web.Application) -> str:
     return "<table>" + "".join(f"<tr><th>{k}</th><td>{v}</td></tr>" for k, v in rows) + "</table>"
 
 
-def led_html(state: ConnectionState) -> str:
-    """Statuslampje; tikken opent de statuspagina. Wordt live bijgewerkt."""
-    return (
-        '<a id="led" class="led-bar" href="/status" title="Status van de verbinding">'
+def led_html(request: web.Request) -> str:
+    """Statuslampje, live bijgewerkt. Voor de beheerder een link naar de status onder App."""
+    state: ConnectionState = request.app["state"]
+    inner = (
         f'<span class="led {esc(state.level)}" aria-hidden="true"></span>'
-        f'<span id="led-text">{esc(state.status)}</span></a>'
+        f'<span id="led-text">{esc(state.status)}</span>'
     )
+    if request.get("role") == ROLE_ADMIN:
+        return f'<a id="led" class="led-bar" href="/app#status" title="Status van de verbinding">{inner}</a>'
+    return f'<span id="led" class="led-bar" title="Status van de verbinding">{inner}</span>'
 
 
 async def messages_page(request: web.Request) -> web.Response:
@@ -370,20 +386,23 @@ async def messages_page(request: web.Request) -> web.Response:
         "is aangevinkt. Zonder deelmenu, bijvoorbeeld op een pc, opent X met de tekst al ingevuld.</p></details>"
         f'<div class="card"><div id="live-messages">{live["messages_html"]}</div></div>'
     )
-    return page(request, "Berichten", "/", body, script=LIVE_JS, aside=led_html(request.app["state"]))
+    return page(request, "Berichten", "/", body, script=LIVE_JS, aside=led_html(request))
 
 
-async def status_page(request: web.Request) -> web.Response:
-    live = live_logs(request.app)
+async def me_page(request: web.Request) -> web.Response:
+    """Mijn instellingen: alleen wat bij deze gebruiker en dit apparaat hoort."""
+    role = request.get("role")
+    push = push_card(request) or (
+        '<div class="card"><h2>Meldingen</h2><p class="muted">Meldingen zijn niet ingesteld.</p></div>'
+    )
     body = (
-        f'<div class="card"><div id="live-table">{live["status_html"]}</div></div>'
-        f"{push_card(request)}"
+        f"{push}"
+        '<div class="card"><h2>Account</h2>'
+        f'<p>Ingelogd als <strong>{esc(ROLE_LABELS.get(role, role))}</strong> op dit apparaat.</p>'
         '<form method="post" action="/logout" class="logout">'
-        f'{csrf_field(request)}<button type="submit" class="secondary">Uitloggen</button></form>'
+        f'{csrf_field(request)}<button type="submit" class="secondary">Uitloggen</button></form></div>'
     )
-    return page(
-        request, "Status", "/status", body, script=LIVE_JS + PUSH_JS, aside=led_html(request.app["state"])
-    )
+    return page(request, "Mijn instellingen", "/me", body, script=LIVE_JS + PUSH_JS, aside=led_html(request))
 
 
 def push_card(request: web.Request) -> str:
@@ -409,29 +428,22 @@ async def share_page(request: web.Request) -> web.Response:
         f'<div class="card"><div id="one-message">{messages_html([message_item(message)])}</div></div>'
         '<p><a href="/">Alle berichten</a></p>'
     )
-    return page(request, "Delen", "/", body, script=LIVE_JS, aside=led_html(request.app["state"]))
+    return page(request, "Delen", "/", body, script=LIVE_JS, aside=led_html(request))
 
 
-def settings_form(
-    request: web.Request,
-    url_error: str = "",
-    token_error: str = "",
-    url_value: str | None = None,
-    wait_error: str = "",
-    wait_value: str | None = None,
+def connection_html(
+    request: web.Request, url_error: str = "", token_error: str = "", url_value: str | None = None
 ) -> str:
     settings: Settings = request.app["settings"]
     shown = display_url(settings.url) if url_value is None else url_value
     return (
-        f"{flash(request)}"
-        '<div class="card"><h2>URL</h2><form method="post" action="/settings">'
+        '<h3>URL</h3><form method="post" action="/settings">'
         f'{csrf_field(request)}<input type="hidden" name="action" value="url">'
         '<label for="url">Websocket-URL (ws:// of wss://, zonder token)</label>'
         f'<input type="url" id="url" name="url" value="{esc(shown)}" required maxlength="2048" autocomplete="off">'
         f'{message_box(url_error, "error")}'
-        '<div class="row"><button type="submit">URL opslaan</button></div></form></div>'
-        '<div class="card"><h2>Token</h2>'
-        '<form method="post" action="/settings">'
+        '<div class="row"><button type="submit">URL opslaan</button></div></form>'
+        '<h3>Token</h3><form method="post" action="/settings">'
         f'{csrf_field(request)}<input type="hidden" name="action" value="token">'
         '<label for="token">Token</label>'
         '<div class="pw"><input type="password" id="token" name="token" '
@@ -439,23 +451,97 @@ def settings_form(
         '<button type="button" class="reveal" data-target="token" title="Toon token" '
         f'aria-label="Toon token" aria-pressed="false">{EYE_ICONS}</button></div>'
         f'{message_box(token_error, "error")}'
-        '<div class="row"><button type="submit">Token opslaan</button></div></form></div>'
-        '<div class="card"><h2>Wachten op de doelpuntmaker</h2>'
+        '<div class="row"><button type="submit">Token opslaan</button></div></form>'
+    )
+
+
+def goal_wait_html(request: web.Request, wait_error: str = "", wait_value: str | None = None) -> str:
+    settings: Settings = request.app["settings"]
+    return (
         '<p class="muted small">Na een eigen doelpunt wacht de app zo lang op de naam van de doelpuntmaker. '
         "Komt die niet, dan volgt het bericht zonder naam. 0 = niet wachten.</p>"
         '<form method="post" action="/settings">'
         f'{csrf_field(request)}<input type="hidden" name="action" value="goal_wait">'
-        '<label for="goal_wait">Wachttijd (seconden)</label>'
+        '<label for="goal_wait">Wachttijd op de doelpuntmaker (seconden)</label>'
         f'<input type="number" id="goal_wait" name="goal_wait" class="num" min="0" max="{MAX_GOAL_WAIT_SECONDS}" '
         'step="1" inputmode="numeric" required '
         f'value="{esc(wait_value if wait_value is not None else int(settings.goal_wait_seconds))}">'
         f'{message_box(wait_error, "error")}'
-        '<div class="row"><button type="submit">Wachttijd opslaan</button></div></form></div>'
+        '<div class="row"><button type="submit">Wachttijd opslaan</button></div></form>'
     )
 
 
-async def settings_page(request: web.Request) -> web.Response:
-    return page(request, "Verbinding", "/settings", settings_form(request), script=REVEAL_JS)
+def logging_html(request: web.Request) -> str:
+    live = live_logs(request.app)
+    raw_lines = tail_lines(request.app["raw_log"], RAW_LOG_ENTRIES, max_bytes=3_000_000)
+    return (
+        '<h3>Berichten en fouten</h3>'
+        f'<p id="live-note" class="muted small">{esc(live["note"])}</p>'
+        f'<pre id="live-log">{esc(live["app"])}</pre>'
+        '<h3>Ruwe websocketberichten</h3>'
+        f'<p class="muted small">De laatste {RAW_LOG_ENTRIES}, bij het laden van de pagina. Tik op een bericht '
+        "voor de wedstrijdstatus (<code>scoreboard_data</code>).</p>"
+        f"{raw_entries_html(raw_lines)}"
+    )
+
+
+# Welk blok open moet na opslaan (via ?msg=...).
+BLOCK_FOR_MESSAGE = {
+    "url": "verbinding", "token": "verbinding", "goal_wait": "doelpunten",
+    "templates": "sjablonen", "reset": "sjablonen",
+}
+OPEN_HASH_JS = (
+    "(function(){function o(){var d=location.hash&&document.getElementById(location.hash.slice(1));"
+    "if(d&&d.tagName==='DETAILS'){d.open=true;d.scrollIntoView();}}o();"
+    "window.addEventListener('hashchange',o);})();"
+)
+
+
+def app_page(
+    request: web.Request,
+    open_block: str | None = None,
+    connection: dict | None = None,
+    goal_wait: dict | None = None,
+    templates: tuple[dict, dict] | None = None,
+    status: int = 200,
+) -> web.Response:
+    """App-instellingen (alleen beheerder): uitklapbare blokken, elk met een eigen opslaanknop."""
+    settings: Settings = request.app["settings"]
+    open_block = open_block or BLOCK_FOR_MESSAGE.get(request.query.get("msg", ""))
+    values, errors = templates or (settings.templates, {})
+
+    def block(block_id: str, title: str, content: str) -> str:
+        is_open = " open" if block_id == open_block else ""
+        return (
+            f'<details class="block" id="{block_id}"{is_open}><summary>{esc(title)}</summary>'
+            f'<div class="block-body">{content}</div></details>'
+        )
+
+    body = (
+        f"{flash(request)}"
+        '<p class="note">Deze instellingen gelden voor iedereen die de app gebruikt.</p>'
+        + block("status", "Status", f'<div id="live-table">{status_table_html(request.app)}</div>')
+        + block("verbinding", "Verbinding", connection_html(request, **(connection or {})))
+        + block("doelpunten", "Doelpunten", goal_wait_html(request, **(goal_wait or {})))
+        + block("sjablonen", "Sjablonen", templates_form(request, values, errors))
+        + block("logging", "Logging", logging_html(request))
+    )
+    response = page(
+        request, "App", "/app", body, script=LIVE_JS + REVEAL_JS + OPEN_HASH_JS, aside=led_html(request)
+    )
+    response.set_status(status)
+    return response
+
+
+async def app_view(request: web.Request) -> web.Response:
+    return app_page(request)
+
+
+def redirect_to(target: str):
+    async def handler(request: web.Request) -> web.Response:
+        raise web.HTTPSeeOther(target)
+
+    return handler
 
 
 async def settings_post(request: web.Request) -> web.Response:
@@ -476,17 +562,13 @@ async def settings_post(request: web.Request) -> web.Response:
             raise ValueError("Onbekende actie.")
     except ValueError as error:
         if action == "token":
-            kwargs = {"token_error": str(error)}
-        elif action == "goal_wait":
-            kwargs = {"wait_error": str(error), "wait_value": str(form.get("goal_wait", ""))}
-        else:
-            kwargs = {"url_error": str(error), "url_value": str(form.get("url", ""))}
-        response = page(
-            request, "Verbinding", "/settings", settings_form(request, **kwargs), script=REVEAL_JS
-        )
-        response.set_status(400)
-        return response
-    raise web.HTTPSeeOther(f"/settings?msg={action}")
+            return app_page(request, "verbinding", connection={"token_error": str(error)}, status=400)
+        if action == "goal_wait":
+            wait = {"wait_error": str(error), "wait_value": str(form.get("goal_wait", ""))}
+            return app_page(request, "doelpunten", goal_wait=wait, status=400)
+        url = {"url_error": str(error), "url_value": str(form.get("url", ""))}
+        return app_page(request, "verbinding", connection=url, status=400)
+    raise web.HTTPSeeOther(f"/app?msg={action}#{BLOCK_FOR_MESSAGE[action]}")
 
 
 def templates_form(request: web.Request, values: dict[str, str], errors: dict[str, str]) -> str:
@@ -508,22 +590,16 @@ def templates_form(request: web.Request, values: dict[str, str], errors: dict[st
             f'<div class="preview small">Voorbeeld: {esc(preview) if preview else "(geen bericht)"}</div>'
         )
     return (
-        f"{flash(request)}"
-        '<div class="card"><h2>Aanduidingen</h2>'
+        '<details class="intro"><summary>Aanduidingen</summary>'
         '<p class="muted small">Gebruik deze in een sjabloon, bijvoorbeeld <code>{thuis} - {uit} {stand}</code>. '
         "Een leeg sjabloon betekent dat dat bericht niet wordt verstuurd.</p>"
-        f"<table>{legend}</table></div>"
-        '<div class="card"><form method="post" action="/templates">'
+        f"<table>{legend}</table></details>"
+        '<form method="post" action="/templates">'
         f'{csrf_field(request)}{"".join(fields)}'
         '<div class="row"><button type="submit">Sjablonen opslaan</button></div></form>'
         '<form method="post" action="/templates/reset" class="row">'
-        f'{csrf_field(request)}<button type="submit" class="secondary">Standaardteksten herstellen</button></form></div>'
+        f'{csrf_field(request)}<button type="submit" class="secondary">Standaardteksten herstellen</button></form>'
     )
-
-
-async def templates_page(request: web.Request) -> web.Response:
-    settings: Settings = request.app["settings"]
-    return page(request, "Sjablonen", "/templates", templates_form(request, settings.templates, {}))
 
 
 async def templates_post(request: web.Request) -> web.Response:
@@ -534,18 +610,16 @@ async def templates_post(request: web.Request) -> web.Response:
     }
     errors = {key: error for key in TEMPLATE_INFO if (error := validate_template(key, submitted[key]))}
     if errors:
-        response = page(request, "Sjablonen", "/templates", templates_form(request, submitted, errors))
-        response.set_status(400)
-        return response
+        return app_page(request, "sjablonen", templates=(submitted, errors), status=400)
     settings.set_templates(submitted)
     logger.info("Berichtsjablonen gewijzigd via de webomgeving")
-    raise web.HTTPSeeOther("/templates?msg=templates")
+    raise web.HTTPSeeOther("/app?msg=templates#sjablonen")
 
 
 async def templates_reset(request: web.Request) -> web.Response:
     request.app["settings"].reset_templates()
     logger.info("Berichtsjablonen hersteld naar de standaard via de webomgeving")
-    raise web.HTTPSeeOther("/templates?msg=reset")
+    raise web.HTTPSeeOther("/app?msg=reset#sjablonen")
 
 
 def post_url(text: str) -> str:
@@ -604,8 +678,8 @@ def message_item(message: MatchMessage) -> dict:
     }
 
 
-def live_logs(app: web.Application) -> dict:
-    """De teksten voor de pagina Logging; ook gebruikt voor de live-updates."""
+def live_logs(app: web.Application, admin: bool = True) -> dict:
+    """Live-gegevens. Een gebruiker (geen beheerder) krijgt geen logregels en geen statustabel."""
     app_lines = tail_lines(app["app_log"], APP_LOG_LINES)
     note = "Nieuwste bovenaan."
     memory: MemoryLogHandler | None = app["memory_log"]
@@ -616,14 +690,16 @@ def live_logs(app: web.Application) -> dict:
             "sinds de laatste start. " + note
         )
     messages = [message_item(m) for m in reversed(app["state"].messages)]
-    return {
+    data = {
         "messages": messages,
         "messages_html": messages_html(messages),
-        "status_html": status_table_html(app),
         "led": {"level": app["state"].level, "status": app["state"].status},
-        "app": "\n".join(reversed(app_lines)) or "(nog geen logregels)",
-        "note": note,
     }
+    if admin:
+        data["status_html"] = status_table_html(app)
+        data["app"] = "\n".join(reversed(app_lines)) or "(nog geen logregels)"
+        data["note"] = note
+    return data
 
 
 async def logs_data(request: web.Request) -> web.Response:
@@ -631,7 +707,7 @@ async def logs_data(request: web.Request) -> web.Response:
     endpoint = request.headers.get("X-Push-Endpoint")
     if push is not None and endpoint:
         push.store.mark_present(endpoint)  # startpagina open: geen pushmeldingen naar dit apparaat
-    return web.json_response(live_logs(request.app))
+    return web.json_response(live_logs(request.app, admin=request.get("role") == ROLE_ADMIN))
 
 
 async def json_body(request: web.Request) -> dict:
@@ -812,21 +888,6 @@ def raw_entries_html(lines: list[str]) -> str:
     return "".join(items)
 
 
-async def logs_page(request: web.Request) -> web.Response:
-    live = live_logs(request.app)
-    raw_lines = tail_lines(request.app["raw_log"], RAW_LOG_ENTRIES, max_bytes=3_000_000)
-    body = (
-        '<div class="card"><h2>Berichten en fouten</h2>'
-        f'<p id="live-note" class="muted small">{esc(live["note"])}</p>'
-        f'<pre id="live-log">{esc(live["app"])}</pre></div>'
-        '<div class="card"><h2>Ruwe websocketberichten</h2>'
-        f'<p class="muted small">De laatste {RAW_LOG_ENTRIES}, bij het laden van de pagina. Tik op een bericht '
-        "voor de wedstrijdstatus (<code>scoreboard_data</code>).</p>"
-        f"{raw_entries_html(raw_lines)}</div>"
-    )
-    return page(request, "Logging", "/logs", body, script=LIVE_JS, aside=led_html(request.app["state"]))
-
-
 async def health(request: web.Request) -> web.Response:
     return web.json_response({"status": "ok", "connection": request.app["state"].status})
 
@@ -922,43 +983,71 @@ def load_session_secret(path: Path) -> bytes:
     return secret
 
 
-def _session_signature(app: web.Application, payload: str) -> str:
-    # De sleutel hangt ook af van gebruikersnaam en wachtwoord: wijzig je die,
-    # dan zijn alle bestaande sessies direct ongeldig.
+def role_credentials(app, role: str) -> tuple[str, str] | None:
+    if role == ROLE_ADMIN:
+        return app["username"], app["password"]
+    if role == ROLE_USER and app.get("share_password"):
+        return app["share_user"], app["share_password"]
+    return None
+
+
+def _session_signature(app, role: str, payload: str) -> str | None:
+    # De sleutel hangt af van de gebruikersnaam en het wachtwoord van die rol: wijzig je
+    # die, dan zijn de bestaande sessies van die rol direct ongeldig.
+    credentials = role_credentials(app, role)
+    if credentials is None:
+        return None
     key = hmac.new(
-        app["session_secret"], f"{app['username']}\0{app['password']}".encode(), hashlib.sha256
+        app["session_secret"], f"{role}\0{credentials[0]}\0{credentials[1]}".encode(), hashlib.sha256
     ).digest()
     return hmac.new(key, payload.encode(), hashlib.sha256).hexdigest()
 
 
-def make_session(app: web.Application, now: float | None = None) -> str:
+def make_session(app, now: float | None = None, role: str = ROLE_ADMIN) -> str:
     expires = int((time.time() if now is None else now) + app["session_days"] * 86400)
-    payload = str(expires)
-    return f"{payload}.{_session_signature(app, payload)}"
+    payload = f"{role}:{expires}"
+    return f"{payload}.{_session_signature(app, role, payload)}"
 
 
-def valid_session(app: web.Application, value: str | None, now: float | None = None) -> bool:
+def session_role(app, value: str | None, now: float | None = None) -> str | None:
+    """De rol uit een geldig sessiecookie, of None."""
     if not value or "." not in value:
-        return False
-    payload, signature = value.split(".", 1)
-    if not hmac.compare_digest(signature, _session_signature(app, payload)):
-        return False
+        return None
+    payload, signature = value.rsplit(".", 1)
+    role, _, expires = payload.partition(":")
+    expected = _session_signature(app, role, payload)
+    if expected is None or not hmac.compare_digest(signature, expected):
+        return None
     try:
-        return int(payload) > (time.time() if now is None else now)
+        return role if int(expires) > (time.time() if now is None else now) else None
     except ValueError:
-        return False
+        return None
 
 
-def is_authorized(request: web.Request, username: str, password: str) -> bool:
+def valid_session(app, value: str | None, now: float | None = None) -> bool:
+    return session_role(app, value, now) is not None
+
+
+def credentials_role(app, username: str, password: str) -> str | None:
+    """Welke rol hoort bij deze gebruikersnaam en dit wachtwoord (beheerder gaat voor)."""
+    for role in (ROLE_ADMIN, ROLE_USER):
+        credentials = role_credentials(app, role)
+        if credentials is None:
+            continue
+        user_ok = hmac.compare_digest(username.encode(), credentials[0].encode())
+        pass_ok = hmac.compare_digest(password.encode(), credentials[1].encode())
+        if user_ok and pass_ok:
+            return role
+    return None
+
+
+def basic_role(request: web.Request) -> str | None:
     """HTTP Basic, voor scripts en tools (de browser gebruikt de inlogpagina)."""
-    header = request.headers.get("Authorization", "")
     try:
-        auth = BasicAuth.decode(header, encoding="utf-8")
+        auth = BasicAuth.decode(request.headers.get("Authorization", ""), encoding="utf-8")
     except ValueError:
-        return False
-    user_ok = hmac.compare_digest(auth.login.encode(), username.encode())
-    pass_ok = hmac.compare_digest(auth.password.encode(), password.encode())
-    return user_ok and pass_ok
+        return None
+    return credentials_role(request.app, auth.login, auth.password)
 
 
 def is_https(request: web.Request) -> bool:
@@ -988,7 +1077,7 @@ def login_form(request: web.Request, error: str = "", next_url: str = "/") -> st
 
 
 async def login_page(request: web.Request) -> web.Response:
-    if valid_session(request.app, request.cookies.get(SESSION_COOKIE)):
+    if session_role(request.app, request.cookies.get(SESSION_COOKIE)):
         raise web.HTTPSeeOther(safe_next(request.query.get("next")))
     form = login_form(request, next_url=safe_next(request.query.get("next")))
     return page(request, "Inloggen", "", form, show_nav=False)
@@ -998,9 +1087,8 @@ async def login_post(request: web.Request) -> web.Response:
     form = request["form"]
     app = request.app
     next_url = safe_next(str(form.get("next", "/")))
-    user_ok = hmac.compare_digest(str(form.get("username", "")).encode(), app["username"].encode())
-    pass_ok = hmac.compare_digest(str(form.get("password", "")).encode(), app["password"].encode())
-    if not (user_ok and pass_ok):
+    role = credentials_role(app, str(form.get("username", "")), str(form.get("password", "")))
+    if role is None:
         await asyncio.sleep(1)  # remt het raden van wachtwoorden
         logger.warning("Mislukte inlogpoging in de webomgeving")
         response = page(
@@ -1012,7 +1100,7 @@ async def login_post(request: web.Request) -> web.Response:
     response = web.HTTPSeeOther(next_url)
     response.set_cookie(
         SESSION_COOKIE,
-        make_session(app),
+        make_session(app, role=role),
         max_age=app["session_days"] * 86400,
         path="/",
         httponly=True,
@@ -1042,15 +1130,22 @@ async def security(request: web.Request, handler):
     app = request.app
     request["nonce"] = secrets.token_urlsafe(16)
     public = request.path in PUBLIC_PATHS or request.path.startswith("/static/")
-    if not public and not valid_session(app, request.cookies.get(SESSION_COOKIE)):
+    role = session_role(app, request.cookies.get(SESSION_COOKIE))
+    if not public and role is None:
         if "Authorization" in request.headers:
-            if not is_authorized(request, app["username"], app["password"]):
+            role = basic_role(request)
+            if role is None:
                 await asyncio.sleep(1)  # remt het raden van wachtwoorden
                 return web.Response(status=401, text="Onjuiste inloggegevens")
         elif wants_html(request):
             raise web.HTTPSeeOther(f"/login?{urlencode({'next': request.path_qs})}")
         else:
             return web.Response(status=401, text="Inloggen vereist")
+    request["role"] = role
+    if request.path in ADMIN_PATHS and role != ROLE_ADMIN:
+        if wants_html(request):
+            raise web.HTTPSeeOther("/")
+        return web.Response(status=403, text="Alleen voor beheerders.")
     if request.method == "POST":
         form = await request.post()
         token = str(form.get("csrf", "") or request.headers.get("X-CSRF-Token", ""))
@@ -1086,6 +1181,8 @@ def create_web_app(
     session_secret: bytes | None = None,
     session_days: int = DEFAULT_SESSION_DAYS,
     push=None,
+    share_user: str = "gebruiker",
+    share_password: str = "",
 ) -> web.Application:
     app = web.Application(middlewares=[security], client_max_size=64 * 1024)
     app["push"] = push  # PushSender, of None als meldingen uit staan
@@ -1098,6 +1195,9 @@ def create_web_app(
     app["memory_log"] = memory_log
     app["username"] = username
     app["password"] = password
+    # Tweede login met alleen delen en eigen instellingen; leeg wachtwoord = uit.
+    app["share_user"] = share_user
+    app["share_password"] = share_password
     app["csrf"] = secrets.token_urlsafe(32)
     app["session_secret"] = session_secret or secrets.token_bytes(32)
     app["session_days"] = session_days
@@ -1111,13 +1211,16 @@ def create_web_app(
             web.get("/sw.js", service_worker),
             web.static("/static", STATIC_DIR, append_version=False),
             web.get("/", messages_page),
-            web.get("/status", status_page),
-            web.get("/settings", settings_page),
+            web.get("/me", me_page),
+            web.get("/app", app_view),
             web.post("/settings", settings_post),
-            web.get("/templates", templates_page),
             web.post("/templates", templates_post),
             web.post("/templates/reset", templates_reset),
-            web.get("/logs", logs_page),
+            # Oude adressen sturen door naar het juiste blok.
+            web.get("/status", redirect_to("/app#status")),
+            web.get("/settings", redirect_to("/app#verbinding")),
+            web.get("/templates", redirect_to("/app#sjablonen")),
+            web.get("/logs", redirect_to("/app#logging")),
             web.get("/logs/data", logs_data),
             web.get("/photo/{photo_id:[0-9a-f]{24}}", photo),
             web.get("/share/{key:[0-9a-f]{12}}", share_page),
@@ -1143,10 +1246,13 @@ async def start_web(
     session_secret: bytes | None = None,
     session_days: int = DEFAULT_SESSION_DAYS,
     push=None,
+    share_user: str = "gebruiker",
+    share_password: str = "",
 ) -> web.AppRunner:
     app = create_web_app(
         settings, state, app_log, raw_log, username, password, memory_log,
         session_secret=session_secret, session_days=session_days, push=push,
+        share_user=share_user, share_password=share_password,
     )
     runner = web.AppRunner(app, access_log=None)
     await runner.setup()

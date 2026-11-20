@@ -98,8 +98,16 @@ Elk bericht is de volledige status (~175 KB JSON). Relevant in `scoreboard_data`
   regel, controleer opmaak op ~390 px breed. Een schermafbeelding kan met Edge
   zonder venster (`msedge --headless=new --screenshot`); Edge heeft een minimale
   vensterbreedte van ~500 px, dus zet de pagina zelf op `width:390px`.
-- Pagina's: `/` berichten + statuslampje, `/status`, `/settings` (Verbinding),
-  `/templates` (Sjablonen), `/logs`. Live-updates via `/logs/data` (JSON).
+- Pagina's: `/` berichten + statuslampje, `/me` (Mijn instellingen: meldingen,
+  uitloggen), `/app` (alleen beheerder: blokken Status, Verbinding, Doelpunten,
+  Sjablonen, Logging), `/share/<sleutel>` (deelscherm uit een pushmelding).
+  Live-updates via `/logs/data` (JSON; voor een gebruiker zonder logregels en
+  statustabel). Oude adressen (`/status`, `/settings`, `/templates`, `/logs`)
+  sturen door naar `/app#blok`; de POST-adressen `/settings` en `/templates` bestaan nog.
+- Rollen: beheerder (`WEB_USER`/`WEB_PASSWORD`) en gebruiker
+  (`SHARE_USER`/`SHARE_PASSWORD`, optioneel). De rol zit in het ondertekende
+  sessiecookie; `ADMIN_PATHS` wordt in de middleware afgeschermd. Nieuwe
+  app-instellingen horen onder `/app` en in `ADMIN_PATHS`, persoonlijke onder `/me`.
 
 ## Valkuilen die al eens fout gingen
 

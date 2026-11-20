@@ -15,6 +15,9 @@ WS_TOKEN=JWT <jouw-geldige-token>
 REGULAR_MINUTES=90
 WEB_USER=admin
 WEB_PASSWORD=<kies-een-wachtwoord>
+# optioneel, voor anderen die alleen berichten delen:
+SHARE_USER=gebruiker
+SHARE_PASSWORD=<ander-wachtwoord>
 ```
 
 - `WS_URL` en `WS_TOKEN` zijn beginwaarden. Wat je later in de webomgeving
@@ -112,49 +115,60 @@ met `Ctrl+C`.
 
 ## Webomgeving
 
-De webomgeving is gemaakt voor de telefoon. Inloggen doe je op de inlogpagina
-met `WEB_USER` en `WEB_PASSWORD`. Je blijft daarna 30 dagen ingelogd op dat
-apparaat (`SESSION_DAYS` in `.env`), ook na een herstart of update. Wijzig je
-`WEB_USER` of `WEB_PASSWORD`, dan moet iedereen opnieuw inloggen. Uitloggen kan
-onderaan de pagina Status. Scripts en tools kunnen ook HTTP Basic gebruiken.
-Formulieren hebben een CSRF-token, scripts zijn alleen met een nonce per pagina
-toegestaan en alle uitvoer wordt ge-escaped.
+De webomgeving is gemaakt voor de telefoon en kent twee rollen:
+
+| Rol | Inloggen met | Ziet |
+|---|---|---|
+| Beheerder | `WEB_USER` / `WEB_PASSWORD` | Berichten · Mijn instellingen · App |
+| Gebruiker | `SHARE_USER` / `SHARE_PASSWORD` | Berichten · Mijn instellingen |
+
+De gebruikerslogin is bedoeld voor anderen die berichten delen; zonder
+`SHARE_PASSWORD` staat hij uit. Een gebruiker kan niets aan de app wijzigen (de
+server weigert dat ook, niet alleen de schermen).
+
+Je blijft 30 dagen ingelogd op een apparaat (`SESSION_DAYS`), ook na een
+herstart of update. Wijzig je de naam of het wachtwoord van een rol, dan moet
+alleen die rol opnieuw inloggen. Scripts en tools kunnen ook HTTP Basic
+gebruiken. Formulieren hebben een CSRF-token, scripts zijn alleen met een nonce
+per pagina toegestaan en alle uitvoer wordt ge-escaped.
 
 - **Berichten (startpagina):** alleen de wedstrijdberichten, nieuwste bovenaan,
   met rechtsboven een statuslampje (groen = verbonden, oranje = bezig of
-  wachten, rood = fout, grijs = de app is vanaf je telefoon niet bereikbaar;
-  tik erop voor de statuspagina). Valt het internet van de NAS weg, dan ziet de
-  app dat binnen ongeveer 20 seconden. De uitleg staat achter
-  "Hoe werkt delen?". Alles werkt zichzelf elke 2 seconden bij.
+  wachten, rood = fout, grijs = de app is vanaf je telefoon niet bereikbaar).
+  Valt het internet van de NAS weg, dan ziet de app dat binnen ongeveer 20
+  seconden. De uitleg staat achter "Hoe werkt delen?".
   - **Delen:** bij elk bericht. Opent het deelmenu van je telefoon; kies daar X.
     Zonder deelmenu (op een pc, of zonder HTTPS) opent X met de tekst al
     ingevuld. De app heeft geen toegang tot je X-account nodig.
   - **Foto meesturen:** bij een eigen doelpunt met doelpuntmaker staat een
     preview van de foto (`goalImage`, anders `image`) en dit vinkje, standaard
     aan. Uitgezet wordt de preview grijs en deel je alleen de tekst. Delen met
-    foto werkt alleen op een telefoon of tablet en **alleen via HTTPS**; op een
-    Synology regel je dat met de reverse proxy en een certificaat in DSM. De app
+    foto werkt alleen op een telefoon of tablet en **alleen via HTTPS**. De app
     haalt de foto zelf op en geeft alleen foto's door die in een
     wedstrijdbericht voorkomen. Let op: het gaat om foto's van spelers; of ze op
     X mogen, bepaalt de club.
   - Berichten boven 280 tekens worden gemarkeerd.
-- **Status:** verbindingsstatus, laatste bericht en fout, volgende poging, URL
-  en token (met vervaldatum als het een JWT met `exp` is), en de knop Uitloggen.
-- **Verbinding:** URL en token wijzigen, en de **wachttijd op de
-  doelpuntmaker** (standaard 20 seconden, 0 = niet wachten; geldt vanaf het
-  volgende doelpunt). Het token staat verborgen in het veld en maak je zichtbaar
-  met het oog-icoon; het staat alleen op deze pagina. Een nieuwe URL of een
-  nieuw token bouwt de verbinding direct opnieuw op. De URL mag geen `token=`
-  bevatten.
-- **Sjablonen:** de teksten van alle berichten, met voorbeeld. Een leeg
-  sjabloon betekent dat dat bericht niet wordt verstuurd. Wijzigingen werken
-  direct, zonder herstart.
-- **Logging:** de laatste 300 regels van `app.log`, live bijgewerkt (nieuwste
-  bovenaan), en de laatste 10 ruwe berichten. Per ruw bericht zie je een
-  samenvatting (tijd, stand, helft en minuut); uitgeklapt zie je de
-  wedstrijdstatus (`scoreboard_data`) als ingesprongen JSON. Grote velden zoals
-  sponsors en teams staan alleen in het logbestand. Kan het logbestand niet
-  worden geschreven, dan toont de pagina de regels sinds de laatste start.
+- **Mijn instellingen** (per gebruiker en apparaat): pushmeldingen aan/uit met
+  een testmelding, en uitloggen.
+- **App** (alleen beheerder, geldt voor iedereen), met uitklapbare blokken die
+  elk een eigen opslaanknop hebben:
+  - **Status:** verbindingsstatus, laatste bericht en fout, volgende poging, URL
+    en token (met vervaldatum als het een JWT met `exp` is). Het lampje linkt
+    hierheen.
+  - **Verbinding:** URL en token. Het token staat verborgen in het veld en maak
+    je zichtbaar met het oog-icoon; het staat alleen op deze pagina. Een nieuwe
+    URL of een nieuw token bouwt de verbinding direct opnieuw op. De URL mag
+    geen `token=` bevatten.
+  - **Doelpunten:** de wachttijd op de doelpuntmaker (standaard 20 seconden,
+    0 = niet wachten; geldt vanaf het volgende doelpunt).
+  - **Sjablonen:** de teksten van alle berichten, met voorbeeld. Een leeg
+    sjabloon betekent dat dat bericht niet wordt verstuurd.
+  - **Logging:** de laatste 300 regels van `app.log` (live, nieuwste bovenaan)
+    en de laatste 10 ruwe berichten met een samenvatting; uitgeklapt zie je de
+    wedstrijdstatus (`scoreboard_data`) als ingesprongen JSON.
+
+  De oude adressen `/status`, `/settings`, `/templates` en `/logs` sturen door
+  naar het juiste blok.
 
 ## Pushmeldingen
 
@@ -163,7 +177,7 @@ dicht is. Tik je erop, dan opent een **deelscherm** met alleen dat bericht (en
 de foto): tik op Delen. Zit je al op de startpagina, dan krijg je geen melding,
 want daar zie je het bericht al.
 
-- Aanzetten per apparaat op de pagina **Status**, kaart Meldingen (met een knop
+- Aanzetten per apparaat onder **Mijn instellingen**, kaart Meldingen (met een knop
   voor een testmelding). Werkt alleen via **HTTPS**; op een iPhone alleen als de
   app op je beginscherm staat (iOS 16.4 of nieuwer).
 - De melding gaat versleuteld via de pushdienst van je telefoon (Apple, Google,

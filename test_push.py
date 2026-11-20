@@ -340,8 +340,8 @@ class PushWebTests(AioHTTPTestCase):
         gone = await self.client.get("/share/0123456789ab", headers=AUTH, allow_redirects=False)
         self.assertEqual((gone.status, gone.headers["Location"]), (303, "/"))
 
-    async def test_status_page_has_the_notifications_card(self):
-        body = await (await self.client.get("/status", headers=AUTH)).text()
+    async def test_my_settings_page_has_the_notifications_card(self):
+        body = await (await self.client.get("/me", headers=AUTH)).text()
         self.assertIn('id="push-toggle"', body)
         self.assertIn(f'data-csrf="{self.app["csrf"]}"', body)
         self.assertIn("pushManager.subscribe", body)
@@ -363,8 +363,9 @@ class NoPushWebTests(AioHTTPTestCase):
         return create_web_app(settings, ConnectionState(), root / "a", root / "r", "admin", "wachtwoord")
 
     async def test_without_push_there_is_no_card_and_no_key(self):
-        body = await (await self.client.get("/status", headers=AUTH)).text()
+        body = await (await self.client.get("/me", headers=AUTH)).text()
         self.assertNotIn('id="push-toggle"', body)
+        self.assertIn("Meldingen zijn niet ingesteld", body)
         self.assertEqual((await self.client.get("/push/key", headers=AUTH)).status, 404)
 
 

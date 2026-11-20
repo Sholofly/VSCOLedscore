@@ -619,6 +619,9 @@ async def main() -> None:
             memory_log=memory_log,
             session_secret=load_session_secret(data_dir / "session_secret"),
             push=pusher,
+            # Tweede login: alleen berichten delen en eigen instellingen (leeg = uit).
+            share_user=read_setting(config, "SHARE_USER", "gebruiker"),
+            share_password=read_setting(config, "SHARE_PASSWORD"),
             session_days=int(session_days),
             username=read_setting(config, "WEB_USER", "admin"),
             password=password,

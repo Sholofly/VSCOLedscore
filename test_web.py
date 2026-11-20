@@ -51,17 +51,21 @@ class WebTests(AioHTTPTestCase):
     async def test_pages_render_and_only_the_connection_page_contains_the_token(self):
         self.state.set("verbonden", "ok")
         self.state.record_error("iets misgegaan")
-        for path in ("/", "/status", "/settings", "/templates", "/logs"):
+        for path in ("/", "/me", "/app"):
             resp = await self.client.get(path, headers=AUTH)
             body = await resp.text()
             self.assertEqual(resp.status, 200, path)
-            if path == "/settings":
+            if path == "/app":
                 self.assertIn("supergeheim", body)
             else:
                 self.assertNotIn("supergeheim", body, path)
             self.assertIn("default-src 'none'", resp.headers["Content-Security-Policy"])
             self.assertEqual(resp.headers["Cache-Control"], "no-store")
-        status = await (await self.client.get("/status", headers=AUTH)).text()
+        for old, block in (("/status", "status"), ("/settings", "verbinding"),
+                           ("/templates", "sjablonen"), ("/logs", "logging")):
+            resp = await self.client.get(old, headers=AUTH, allow_redirects=False)
+            self.assertEqual((resp.status, resp.headers["Location"]), (303, f"/app#{block}"), old)
+        status = await (await self.client.get("/app", headers=AUTH)).text()
         self.assertIn("verbonden", status)
         self.assertIn("iets misgegaan", status)
         self.assertIn("ingesteld", status)
@@ -86,7 +90,7 @@ class WebTests(AioHTTPTestCase):
         self.state.add_message("bericht")
         body = await (await self.client.get("/", headers=AUTH)).text()
         self.assertIn('class="led ok"', body)
-        self.assertIn('href="/status"', body)  # lampje leidt naar de statuspagina
+        self.assertIn('href="/app#status"', body)  # lampje leidt (voor de beheerder) naar de status
         self.assertIn("<details class=\"intro\"><summary>", body)  # uitleg ingeklapt
         self.assertNotIn('id="live-table"', body)  # geen statustabel op de startpagina
         self.assertIn('id="live-messages"', body)
@@ -165,7 +169,7 @@ class WebTests(AioHTTPTestCase):
             if part.strip().startswith("script-src")
         ][0]
         self.assertNotIn("unsafe", script_src)
-        other = await self.client.get("/templates", headers=AUTH)
+        other = await self.client.get("/me", headers=AUTH)
         self.assertNotIn("querySelectorAll('.reveal')", await other.text())  # oog-script alleen op Verbinding
 
     async def test_token_with_markup_is_escaped_in_the_form(self):
@@ -227,7 +231,7 @@ class WebTests(AioHTTPTestCase):
         self.assertNotIn("<script>", body)
         self.assertIn("&lt;script&gt;", body)
         self.assertIn("ingekort", body)
-        self.assertLess(len(body), 20000)
+        self.assertNotIn("x" * 2000, body)  # lange ruwe regels worden ingekort
 
     async def test_logs_fall_back_to_memory_when_the_log_file_is_unavailable(self):
         import logging
@@ -514,8 +518,11 @@ class SessionTests(AioHTTPTestCase):
         good = make_session(self.app, now=1000)
         self.assertTrue(valid_session(self.app, good, now=1001))
         self.assertFalse(valid_session(self.app, good, now=1000 + 30 * 86400 + 1))  # verlopen
-        expires, signature = good.split(".")
-        self.assertFalse(valid_session(self.app, f"{int(expires) + 999999}.{signature}", now=1001))
+        payload, signature = good.rsplit(".", 1)
+        role, expires = payload.split(":")
+        self.assertFalse(valid_session(self.app, f"{role}:{int(expires) + 999999}.{signature}", now=1001))
+        self.assertFalse(valid_session(self.app, f"user:{expires}.{signature}", now=1001))  # andere rol
+        self.assertFalse(valid_session(self.app, f"{expires}.{signature}", now=1001))  # oud formaat
         for broken in ("", "abc", ".", "x.y", None):
             self.assertFalse(valid_session(self.app, broken))
         other = {**self.app, "password": "nieuw-wachtwoord"}  # wachtwoord gewijzigd
@@ -532,6 +539,104 @@ class SessionTests(AioHTTPTestCase):
         self.assertEqual(load_session_secret(path), first)
         path.write_text("kapot", encoding="utf-8")
         self.assertNotEqual(load_session_secret(path), first)  # onleesbaar: nieuwe sleutel
+
+
+class RoleTests(AioHTTPTestCase):
+    """Beheerder ziet alles; gebruiker alleen Berichten en Mijn instellingen."""
+
+    USER = {"Authorization": BasicAuth("deler", "deelwachtwoord").encode()}
+
+    async def get_application(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        root = Path(folder.name)
+        self.state = ConnectionState()
+        self.settings = Settings(root / "settings.json", "wss://example.test/club/", TOKEN)
+        (root / "app.log").write_text("2026 INFO interne logregel\n", encoding="utf-8")
+        return create_web_app(
+            self.settings, self.state, root / "app.log", root / "raw.log", "admin", "wachtwoord",
+            share_user="deler", share_password="deelwachtwoord",
+        )
+
+    async def login(self, username, password):
+        data = {"csrf": self.app["csrf"], "username": username, "password": password, "next": "/"}
+        return await self.client.post("/login", data=data, allow_redirects=False)
+
+    async def test_user_sees_only_messages_and_own_settings(self):
+        resp = await self.login("deler", "deelwachtwoord")
+        self.assertEqual(resp.status, 303)
+        home = await (await self.client.get("/")).text()
+        self.assertIn('href="/me"', home)
+        self.assertNotIn('href="/app"', home)
+        self.assertNotIn('href="/app#status"', home)  # lampje is voor een gebruiker geen link
+        me = await (await self.client.get("/me")).text()
+        self.assertIn("Ingelogd als <strong>gebruiker</strong>", me)
+        self.assertNotIn("supergeheim", home + me)
+
+    async def test_user_cannot_open_or_change_app_settings(self):
+        await self.login("deler", "deelwachtwoord")
+        for path in ("/app", "/status", "/settings", "/templates", "/logs"):
+            page = await self.client.get(path, headers={"Accept": "text/html"}, allow_redirects=False)
+            self.assertEqual((page.status, page.headers.get("Location")), (303, "/"), path)
+            self.assertEqual((await self.client.get(path)).status, 403, path)
+        csrf = self.app["csrf"]
+        attempts = (
+            ("/settings", {"csrf": csrf, "action": "token", "token": "JWT gekaapt"}),
+            ("/settings", {"csrf": csrf, "action": "url", "url": "wss://evil.test/"}),
+            ("/settings", {"csrf": csrf, "action": "goal_wait", "goal_wait": "0"}),
+            ("/templates", {"csrf": csrf, "tpl_start": "gekaapt"}),
+            ("/templates/reset", {"csrf": csrf}),
+        )
+        for path, data in attempts:
+            self.assertEqual((await self.client.post(path, data=data)).status, 403, path)
+        self.assertEqual(self.settings.token, TOKEN)
+        self.assertEqual(self.settings.url, "wss://example.test/club/")
+        self.assertEqual(self.settings.goal_wait_seconds, 20)
+        self.assertNotEqual(self.settings.templates["start"], "gekaapt")
+
+    async def test_live_data_for_a_user_has_no_logs_or_status_table(self):
+        self.state.add_message("bericht")
+        user = await (await self.client.get("/logs/data", headers=self.USER)).json()
+        self.assertEqual(sorted(user), ["led", "messages", "messages_html"])
+        admin = await (await self.client.get("/logs/data", headers=AUTH)).json()
+        self.assertIn("interne logregel", admin["app"])
+        self.assertIn("status_html", admin)
+
+    async def test_admin_sees_app_with_blocks_and_saving_returns_to_the_block(self):
+        await self.login("admin", "wachtwoord")
+        app_page = await (await self.client.get("/app")).text()
+        for block in ("status", "verbinding", "doelpunten", "sjablonen", "logging"):
+            self.assertIn(f'<details class="block" id="{block}"', app_page)
+        self.assertIn("gelden voor iedereen", app_page)
+        resp = await self.client.post(
+            "/settings", data={"csrf": self.app["csrf"], "action": "goal_wait", "goal_wait": "30"},
+            allow_redirects=False,
+        )
+        self.assertEqual(resp.headers["Location"], "/app?msg=goal_wait#doelpunten")
+        after = await (await self.client.get("/app?msg=goal_wait")).text()
+        self.assertIn('<details class="block" id="doelpunten" open>', after)
+        self.assertIn("Wachttijd opgeslagen", after)
+        bad = await self.client.post(
+            "/settings", data={"csrf": self.app["csrf"], "action": "url", "url": "http://x"}
+        )
+        body = await bad.text()
+        self.assertEqual(bad.status, 400)
+        self.assertIn('<details class="block" id="verbinding" open>', body)
+
+    async def test_user_login_is_off_without_share_password(self):
+        self.app["share_password"] = ""
+        resp = await self.login("deler", "")
+        self.assertEqual(resp.status, 401)
+        self.assertEqual((await self.client.get("/", headers=self.USER)).status, 401)
+
+    async def test_changing_a_password_only_logs_out_that_role(self):
+        from web import make_session, session_role
+
+        admin = make_session(self.app, role="admin")
+        user = make_session(self.app, role="user")
+        self.assertEqual((session_role(self.app, admin), session_role(self.app, user)), ("admin", "user"))
+        changed = {**self.app, "share_password": "nieuw"}
+        self.assertEqual((session_role(changed, admin), session_role(changed, user)), ("admin", None))
 
 
 class InstallableAppTests(AioHTTPTestCase):
