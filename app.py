@@ -371,6 +371,14 @@ class Connector:
     INITIAL_DELAY = 1.0
     MAX_DELAY = 60.0
     STABLE_SECONDS = 30.0  # zo lang verbonden = wachttijd weer terug naar het begin
+    # Elke PING_INTERVAL seconden een ping; zonder antwoord binnen PING_TIMEOUT geldt de
+    # verbinding als verbroken. Zo valt een weggevallen internetverbinding binnen ~20 s op
+    # (zonder ping merkt een TCP-verbinding dat soms pas na minuten).
+    PING_INTERVAL = 10.0
+    PING_TIMEOUT = 10.0
+    # Zonder internet komt er ook geen nette afsluiting van de server: niet lang wachten
+    # (standaard 10 s), anders blijft de status nog die tijd op "verbonden" staan.
+    CLOSE_TIMEOUT = 2.0
 
     def __init__(
         self,
@@ -475,7 +483,13 @@ class Connector:
 
     async def _session(self, uri: str, token: str, lifecycle: MatchLifecycle) -> str:
         """Eén verbinding. Geeft 'changed' bij gewijzigde instellingen, 'closed' bij sluiten."""
-        async with self._connect(uri, max_size=MAX_MESSAGE_BYTES) as websocket:
+        async with self._connect(
+            uri,
+            max_size=MAX_MESSAGE_BYTES,
+            ping_interval=self.PING_INTERVAL,
+            ping_timeout=self.PING_TIMEOUT,
+            close_timeout=self.CLOSE_TIMEOUT,
+        ) as websocket:
             self._connected_at = time.monotonic()
             self.state.set("verbonden", "ok")
             logger.info("Verbonden met het scorebord")

@@ -115,5 +115,12 @@ Elk bericht is de volledige status (~175 KB JSON). Relevant in `scoreboard_data`
   of gebruik een getekend alternatief; een test controleert op stuurtekens.
 - Patchen via een bash-heredoc maakt van backslash-n soms een echte regelovergang
   in de code. Schrijf zulke patches liever via de editor of een scriptbestand.
+- Zonder internet faalt een verbinding niet, er komt alleen niets meer door. Server:
+  ping (`PING_INTERVAL`/`PING_TIMEOUT`) plus een korte `CLOSE_TIMEOUT`, anders wacht
+  websockets nog 10 s op een afscheid dat nooit komt. Pagina: elke fetch krijgt een
+  time-out (AbortController) en het lampje gaat uit zonder recente update; een
+  hangende fetch op een telefoon faalt anders pas na minuten.
+- Gedrag in een echte browser controleren kan met Edge zonder venster plus het
+  DevTools-protocol (`--remote-debugging-port`, `Runtime.evaluate` via websockets).
 - Op de NAS kan `./logs` onschrijfbaar zijn (uid 1000); de app logt dan alleen
   naar console en geheugen, en de webomgeving valt daarop terug.

@@ -62,6 +62,46 @@ async def wait_for(condition, timeout=5.0):
         await asyncio.sleep(0.01)
 
 
+class FreezableProxy:
+    """TCP-proxy die het verkeer ongemerkt kan weggooien, zoals bij wegvallend internet.
+
+    De verbinding wordt dan niet gesloten; er komt alleen niets meer door.
+    """
+
+    def __init__(self, target_port):
+        self.target_port = target_port
+        self.frozen = False
+        self.tasks = set()
+
+    async def start(self):
+        self.server = await asyncio.start_server(self._handle, "127.0.0.1", 0)
+        return self.server.sockets[0].getsockname()[1]
+
+    async def _pipe(self, reader, writer):
+        try:
+            while data := await reader.read(65536):
+                if not self.frozen:
+                    writer.write(data)
+                    await writer.drain()
+        except (ConnectionError, OSError):
+            pass
+        finally:
+            writer.close()
+
+    async def _handle(self, reader, writer):
+        up_reader, up_writer = await asyncio.open_connection("127.0.0.1", self.target_port)
+        for coro in (self._pipe(reader, up_writer), self._pipe(up_reader, writer)):
+            task = asyncio.create_task(coro)
+            self.tasks.add(task)
+            task.add_done_callback(self.tasks.discard)
+
+    async def close(self):
+        self.server.close()
+        for task in list(self.tasks):
+            task.cancel()
+        await asyncio.gather(*self.tasks, return_exceptions=True)
+
+
 class ConnectorTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         folder = tempfile.TemporaryDirectory()
@@ -248,6 +288,29 @@ class ConnectorTests(unittest.IsolatedAsyncioTestCase):
             done, _ = await asyncio.wait({task}, timeout=2)
             self.assertIn(task, done, f"loop stopte niet na annuleren (poging {attempt})")
             self.assertTrue(task.cancelled())
+
+    async def test_silently_lost_connection_is_noticed_through_ping(self):
+        # Internet valt weg: geen foutmelding, er komt alleen niets meer door.
+        async def handler(websocket):
+            await websocket.wait_closed()
+
+        _, port = await self.server(handler)
+        proxy = FreezableProxy(port)
+        proxy_port = await proxy.start()
+        self.addAsyncCleanup(proxy.close)
+        settings, connector = self.make_connector(f"ws://127.0.0.1:{proxy_port}/")
+        connector.PING_INTERVAL = connector.PING_TIMEOUT = 0.2
+        connector.CLOSE_TIMEOUT = 0.2
+        with self.assertLogs("app", level="ERROR") as logs:
+            await self.start(connector)
+            await wait_for(lambda: self.state.status == "verbonden")
+            proxy.frozen = True
+            await wait_for(lambda: self.state.status != "verbonden", timeout=3)
+        self.assertTrue(any("Verbinding mislukt" in line for line in logs.output))
+
+    def test_defaults_detect_a_lost_connection_within_about_25_seconds(self):
+        total = Connector.PING_INTERVAL + Connector.PING_TIMEOUT + Connector.CLOSE_TIMEOUT
+        self.assertLessEqual(total, 25)
 
     async def test_goal_without_scorer_is_reported_after_the_wait_while_connected(self):
         async def handler(websocket):

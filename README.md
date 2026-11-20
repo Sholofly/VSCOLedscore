@@ -122,7 +122,9 @@ toegestaan en alle uitvoer wordt ge-escaped.
 
 - **Berichten (startpagina):** alleen de wedstrijdberichten, nieuwste bovenaan,
   met rechtsboven een statuslampje (groen = verbonden, oranje = bezig of
-  wachten, rood = fout; tik erop voor de statuspagina). De uitleg staat achter
+  wachten, rood = fout, grijs = de app is vanaf je telefoon niet bereikbaar;
+  tik erop voor de statuspagina). Valt het internet van de NAS weg, dan ziet de
+  app dat binnen ongeveer 20 seconden. De uitleg staat achter
   "Hoe werkt delen?". Alles werkt zichzelf elke 2 seconden bij.
   - **Delen:** bij elk bericht. Opent het deelmenu van je telefoon; kies daar X.
     Zonder deelmenu (op een pc, of zonder HTTPS) opent X met de tekst al
