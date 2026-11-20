@@ -214,6 +214,21 @@ class GoalTests(unittest.TestCase):
         self.assertEqual(lifecycle.update(self.payload(started_at=START, home_score=1), now=5), [])
         self.assertEqual(lifecycle.flush_expired(now=5), [f"'1 DOELPUNT Home FC! {trailer(1)}"])
 
+    def test_every_message_knows_its_kind(self):
+        lifecycle = MatchLifecycle(goal_wait=lambda: 0)
+        lifecycle.update(self.payload(), now=0)
+        (start,) = lifecycle.update(self.payload(started_at=START), now=1)
+        (away,) = lifecycle.update(self.payload(started_at=START, away_score=1), now=2)
+        lifecycle.update(self.payload(started_at=START, away_score=1, home_score=1), now=3)
+        (home,) = lifecycle.flush_expired(now=3)
+        (rest,) = lifecycle.update(self.payload(started_at=START, away_score=1, home_score=1, rest=True), now=4)
+        self.assertEqual(
+            [m.kind for m in (start, away, home, rest)], ["start", "goal_away", "goal_home_no_scorer", "rest"]
+        )
+        scored = self.with_scorer(self.payload(started_at=START, home_score=2, away_score=1))
+        events = lifecycle.update(scored, now=5)  # na de rust: tweede helft + doelpunt met naam
+        self.assertEqual([m.kind for m in events], ["second_half", "goal_home"])
+
     def test_scorer_in_same_message_as_goal(self):
         goal = self.with_scorer(self.payload(started_at=START, home_score=1, seconds=30))
         self.assertEqual(

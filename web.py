@@ -921,8 +921,9 @@ self.addEventListener('push', (event) => {
   let data = {};
   try { data = event.data ? event.data.json() : {}; } catch (e) { data = {body: event.data ? event.data.text() : ''}; }
   event.waitUntil(self.registration.showNotification(data.title || 'VSCO Scorebord', {
-    body: data.body || '', tag: data.tag || undefined, icon: '/static/icon-192.png',
-    badge: '/static/icon-192.png', data: {url: data.url || '/'},
+    body: data.body || '', tag: data.tag || undefined,
+    icon: data.icon || '/static/icon-ball.png', badge: data.badge || '/static/badge-ball.png',
+    data: {url: data.url || '/'},
   }));
 });
 self.addEventListener('notificationclick', (event) => {

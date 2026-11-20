@@ -239,12 +239,49 @@ class RealEncryptionTests(unittest.IsolatedAsyncioTestCase):
                 validate_subject(vapid, bad)
 
 
+class NotificationIconTests(unittest.IsolatedAsyncioTestCase):
+    def test_whistle_for_match_moments_and_ball_for_goals(self):
+        from push import notification_icons
+
+        for kind in ("start", "rest", "second_half", "end_win", "end_other"):
+            self.assertEqual(notification_icons(kind), ("/static/icon-whistle.png", "/static/badge-whistle.png"))
+        for kind in ("goal_home", "goal_home_no_scorer", "goal_away", None):
+            self.assertEqual(notification_icons(kind), ("/static/icon-ball.png", "/static/badge-ball.png"))
+
+    def test_icon_files_exist_and_badges_are_transparent(self):
+        import struct
+
+        static = Path(__file__).with_name("static")
+        for name in ("icon-whistle.png", "icon-ball.png", "badge-whistle.png", "badge-ball.png"):
+            data = (static / name).read_bytes()
+            self.assertEqual(data[:8], b"\x89PNG\r\n\x1a\n", name)
+            color_type = data[25]
+            if name.startswith("badge"):
+                # Android gebruikt van een badge alleen de vorm: hij moet transparantie hebben (RGBA).
+                self.assertEqual(color_type, 6, name)
+                width = struct.unpack(">I", data[16:20])[0]
+                self.assertGreaterEqual(width, 72, name)
+
+    async def test_payload_carries_the_icon_for_the_kind_of_message(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        root = Path(folder.name)
+        store, fake = PushStore(root / "push.json"), FakePush()
+        sender = PushSender(store, load_vapid(root / "v.pem"), "https://example.test", fake)
+        store.add(sub(1))
+        await sender.send("'1 De wedstrijd is begonnen!", "abc123def456", "start")
+        await sender.send("'12 DOELPUNT", "abc123def457", "goal_home")
+        self.assertEqual(fake.sent[0][1]["icon"], "/static/icon-whistle.png")
+        self.assertEqual(fake.sent[0][1]["badge"], "/static/badge-whistle.png")
+        self.assertEqual(fake.sent[1][1]["badge"], "/static/badge-ball.png")
+
+
 class ConnectorNotifyTests(unittest.TestCase):
     def test_each_message_is_passed_to_the_notifier_with_its_key(self):
         calls = []
 
         class Notifier:
-            def notify(self, text, key):
+            def notify(self, text, key, kind=None):
                 calls.append((text, key))
 
         folder = tempfile.TemporaryDirectory()
@@ -255,9 +292,25 @@ class ConnectorNotifyTests(unittest.TestCase):
             connector._publish(["eerste", "tweede"])
         self.assertEqual(calls, [(m.text, m.key) for m in state.messages])
 
+    def test_the_kind_of_message_is_passed_on(self):
+        from messages import Message
+
+        kinds = []
+
+        class Notifier:
+            def notify(self, text, key, kind=None):
+                kinds.append(kind)
+
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        connector = Connector(Settings(Path(folder.name) / "s.json"), ConnectionState(), notifier=Notifier())
+        with self.assertLogs("app", level="INFO"):
+            connector._publish([Message("start", kind="start"), Message("doelpunt", "https://x.test/a.jpg", "goal_home")])
+        self.assertEqual(kinds, ["start", "goal_home"])
+
     def test_a_failing_notifier_does_not_stop_publishing(self):
         class Broken:
-            def notify(self, text, key):
+            def notify(self, text, key, kind=None):
                 raise RuntimeError("stuk")
 
         folder = tempfile.TemporaryDirectory()

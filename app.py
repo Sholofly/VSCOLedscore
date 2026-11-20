@@ -150,13 +150,13 @@ class MatchLifecycle:
     def next_deadline(self) -> float | None:
         return self.pending_goal[1] if self.pending_goal else None
 
-    def _render(self, key: str, context: dict[str, Any]) -> list[str]:
+    def _render(self, key: str, context: dict[str, Any]) -> list[Message]:
         try:
             text = render_message(self._templates(), key, context)
         except Exception:  # een kapot sjabloon mag de verwerking niet stoppen
             logger.exception("Sjabloon '%s' kon niet worden ingevuld", key)
             text = render_message(DEFAULT_TEMPLATES, key, context)
-        return [text] if text else []
+        return [Message(text, kind=key)] if text else []
 
     def flush_pending(self) -> list[str]:
         """Meld een wachtend doelpunt zonder doelpuntmaker."""
@@ -237,7 +237,7 @@ class MatchLifecycle:
                     goal_context, _ = self.pending_goal
                     self.pending_goal = None
                     events.extend(
-                        Message(text, scorers[key])
+                        Message(text, scorers[key], "goal_home")
                         for text in self._render("goal_home", {**goal_context, "speler": name})
                     )
 
@@ -434,7 +434,7 @@ class Connector:
             key = self.state.add_message(event, getattr(event, "image", None))
             if self.notifier is not None:
                 try:
-                    self.notifier.notify(str(event), key)
+                    self.notifier.notify(str(event), key, getattr(event, "kind", None))
                 except Exception:  # meldingen mogen de verbinding nooit stoppen
                     logger.exception("Pushmelding kon niet worden ingepland")
 

@@ -39,6 +39,18 @@ MAX_SUBSCRIPTIONS = 20
 PRESENT_SECONDS = 6.0  # zo lang na de laatste update geldt de startpagina als "open"
 TTL_SECONDS = 600  # een melding die na 10 minuten nog niet is afgeleverd, vervalt
 TITLE = "VSCO Scorebord"
+# Icoon per soort bericht: een bal bij doelpunten, anders een fluitje. Het icoon is
+# gekleurd; de badge (statusbalk van Android) is een witte vorm op transparant, want
+# Android gebruikt alleen de vorm.
+GOAL_KINDS = {"goal_home", "goal_home_no_scorer", "goal_away"}
+
+
+def notification_icons(kind: str | None) -> tuple[str, str]:
+    """(icoon, badge) voor een soort bericht; zonder soort (testmelding) de bal."""
+    name = "ball" if kind is None or kind in GOAL_KINDS else "whistle"
+    return f"/static/icon-{name}.png", f"/static/badge-{name}.png"
+
+
 # Contactadres voor de pushdiensten: "mailto:..." of "https://domein" (zonder pad).
 DEFAULT_SUBJECT = "https://github.com"
 _B64URL = re.compile(r"^[A-Za-z0-9_-]+={0,2}$")
@@ -202,13 +214,19 @@ class PushSender:
     def public_key(self) -> str:
         return public_key(self.vapid)
 
-    async def send_one(self, subscription: dict, text: str, key: str | None) -> str:
+    async def send_one(
+        self, subscription: dict, text: str, key: str | None, kind: str | None = None
+    ) -> str:
         """Verstuur één melding: "sent", "gone" (apparaat afgemeld, opgeruimd) of "failed"."""
         # Een melding met hetzelfde label vervangt de vorige stil (geen nieuwe pop-up);
         # daarom krijgt elke testmelding een eigen label.
         tag = key or f"test-{time.time_ns()}"
+        icon, badge = notification_icons(kind)
         payload = json.dumps(
-            {"title": TITLE, "body": text, "url": f"/share/{key}" if key else "/", "tag": tag},
+            {
+                "title": TITLE, "body": text, "url": f"/share/{key}" if key else "/", "tag": tag,
+                "icon": icon, "badge": badge,
+            },
             ensure_ascii=False,
         )
         try:
@@ -237,16 +255,16 @@ class PushSender:
             )
         return "failed"
 
-    async def send(self, text: str, key: str) -> int:
+    async def send(self, text: str, key: str, kind: str | None = None) -> int:
         """Stuur een wedstrijdbericht naar alle apparaten, behalve wie de startpagina open heeft."""
         targets = [s for s in list(self.store.subscriptions) if not self.store.is_present(s["endpoint"])]
-        results = await asyncio.gather(*(self.send_one(s, text, key) for s in targets))
+        results = await asyncio.gather(*(self.send_one(s, text, key, kind) for s in targets))
         return sum(1 for result in results if result == "sent")
 
-    def notify(self, text: str, key: str) -> None:
+    def notify(self, text: str, key: str, kind: str | None = None) -> None:
         """Verstuur op de achtergrond; de verbinding met het scorebord wacht er niet op."""
         if not self.store.subscriptions:
             return
-        task = asyncio.get_running_loop().create_task(self.send(text, key))
+        task = asyncio.get_running_loop().create_task(self.send(text, key, kind))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)

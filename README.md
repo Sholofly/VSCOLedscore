@@ -179,6 +179,8 @@ dicht is. Tik je erop, dan opent een **deelscherm** met alleen dat bericht (en
 de foto): tik op Delen. Zit je al op de startpagina, dan krijg je geen melding,
 want daar zie je het bericht al.
 
+- De melding heeft een **fluitje** bij begin, rust, tweede helft en einde, en
+  een **bal** bij een doelpunt.
 - Aanzetten per apparaat onder **Mijn instellingen**, kaart Meldingen (met een knop
   voor een testmelding). Werkt alleen via **HTTPS**; op een iPhone alleen als de
   app op je beginscherm staat (iOS 16.4 of nieuwer).

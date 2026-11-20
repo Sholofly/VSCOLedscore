@@ -130,6 +130,9 @@ Elk bericht is de volledige status (~175 KB JSON). Relevant in `scoreboard_data`
   anders weigert py_vapid elke melding (stil, alleen een waarschuwing in de log).
   `validate_subject` controleert dit bij het starten; `RealEncryptionTests` test
   de hele keten (versleuteling, VAPID, ontsleutelen) tegen een lokale pushdienst.
+- Meldingsicoon per soort (`Message.kind` = sjabloonnaam, `notification_icons`): bal
+  bij doelpunten, fluitje bij de rest. De badge (Android-statusbalk) moet een witte vorm
+  op transparant zijn (RGBA); een gevuld icoon wordt daar een wit vierkantje.
 - Bij pushmeldingen niet in de service worker stil overslaan: iOS kan dan de
   aanmelding intrekken. "Startpagina open" wordt daarom server-side bijgehouden.
 - Patchen via een bash-heredoc maakt van backslash-n soms een echte regelovergang

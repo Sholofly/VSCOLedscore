@@ -58,13 +58,16 @@ SAMPLE_CONTEXT: dict[str, Any] = {
 }
 
 class Message(str):
-    """Berichttekst, eventueel met de URL van een foto; gedraagt zich verder als tekst."""
+    """Berichttekst met de soort (sjabloonnaam, bv. "start" of "goal_home") en eventueel
+    de URL van een foto; gedraagt zich verder als tekst."""
 
     image: str | None
+    kind: str | None
 
-    def __new__(cls, text: str, image: str | None = None) -> "Message":
+    def __new__(cls, text: str, image: str | None = None, kind: str | None = None) -> "Message":
         message = super().__new__(cls, text)
         message.image = image
+        message.kind = kind
         return message
 
 
