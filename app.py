@@ -202,8 +202,7 @@ class MatchLifecycle:
         scoreboard = data.get("scoreboard")
         scoreboard = scoreboard if isinstance(scoreboard, dict) else {}
         score = (scoreboard.get("home"), scoreboard.get("away"))
-        minute = self._minute(data)
-        context = self._context(home, away, score, "?" if minute is None else str(minute))
+        context = self._context(home, away, score, self._minute_label(data))
         scorers = self._scorers(data)
         events: list[str] = []
 
@@ -310,6 +309,17 @@ class MatchLifecycle:
             second_half = isinstance(period, int) and not isinstance(period, bool) and period >= 1
             return self.regular_minutes // 2 * (2 if second_half else 1)
         return int(seconds // 60) + 1
+
+    def _minute_label(self, data: dict[str, Any]) -> str:
+        """Minuut als tekst, met blessuretijd per helft: 45:30 in de eerste helft is "45 + 1",
+        in de tweede helft is na 90:00 "90 + 1" (zoals bij het eindbericht)."""
+        minute = self._minute(data)
+        if minute is None:
+            return "?"
+        period = data.get("period")
+        second_half = isinstance(period, int) and not isinstance(period, bool) and period >= 1
+        limit = self.regular_minutes if second_half else self.regular_minutes // 2
+        return f"{limit} + {minute - limit}" if minute > limit else str(minute)
 
     @staticmethod
     def _scorers(data: dict[str, Any]) -> dict[tuple[str, int, str], str | None]:

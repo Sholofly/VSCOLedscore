@@ -187,6 +187,8 @@ Aanduidingen: `{minuut}`, `{thuis}`, `{uit}`, `{tegenstander}`, `{stand}`,
 een eigen doelpunt en `{blessuretijd}` bij het einde. Zie de pagina Berichten
 voor de uitleg.
 
+- Blessuretijd telt per helft: na 45:00 in de eerste helft is het `'45 + 1`,
+  na 90:00 in de tweede helft `'90 + 1` (op basis van `REGULAR_MINUTES`).
 - Een eigen doelpunt wacht tot 20 seconden (instelbaar op de pagina Verbinding) op de doelpuntmaker, die in een later
   bericht komt (sjabloon `goal_home`). Komt die niet, dan volgt het sjabloon
   zonder doelpuntmaker. Een doelpunt van de tegenstander wordt direct gemeld.
