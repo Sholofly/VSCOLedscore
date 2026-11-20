@@ -1,3 +1,5 @@
+import unittest
+import asyncio
 import tempfile
 from urllib.parse import parse_qs, urlsplit
 from pathlib import Path
@@ -313,6 +315,57 @@ class PhotoTests(AioHTTPTestCase):
         with self.assertLogs("web", level="WARNING"):
             await self.client.get(self.photo_path(broken), headers=AUTH)
         self.assertEqual(len(self.fetched), 2)
+
+
+class FetchPhotoTests(unittest.IsolatedAsyncioTestCase):
+    """fetch_photo tegen een echte (lokale) server die de foto in stukken stuurt."""
+
+    PHOTO = b"\xff\xd8" + bytes(range(256)) * 600 + b"\xff\xd9"  # ~150 KB
+
+    async def asyncSetUp(self):
+        from aiohttp import web as aioweb
+        from aiohttp.test_utils import TestServer
+
+        async def chunked(request):
+            response = aioweb.StreamResponse(headers={"Content-Type": "image/jpeg"})
+            response.content_length = len(self.PHOTO)
+            await response.prepare(request)
+            for start in range(0, len(self.PHOTO), 8192):
+                await response.write(self.PHOTO[start:start + 8192])
+                await asyncio.sleep(0.001)  # zoals een echte server: niet alles tegelijk
+            await response.write_eof()
+            return response
+
+        async def text(request):
+            return aioweb.Response(text="geen foto")
+
+        async def big(request):
+            return aioweb.Response(body=b"x" * 2048, content_type="image/png")
+
+        app = aioweb.Application()
+        app.add_routes([aioweb.get("/foto.jpg", chunked), aioweb.get("/tekst", text), aioweb.get("/groot", big)])
+        self.server = TestServer(app)
+        await self.server.start_server()
+        self.addAsyncCleanup(self.server.close)
+
+    async def test_whole_photo_is_read_even_when_it_arrives_in_pieces(self):
+        from web import fetch_photo
+
+        data, content_type = await fetch_photo(str(self.server.make_url("/foto.jpg")))
+        self.assertEqual(content_type, "image/jpeg")
+        self.assertEqual(len(data), len(self.PHOTO))
+        self.assertEqual(data, self.PHOTO)
+
+    async def test_non_images_and_too_large_photos_are_refused(self):
+        import web
+
+        with self.assertRaises(ValueError):
+            await web.fetch_photo(str(self.server.make_url("/tekst")))
+        original = web.MAX_PHOTO_BYTES
+        web.MAX_PHOTO_BYTES = 1024
+        self.addCleanup(setattr, web, "MAX_PHOTO_BYTES", original)
+        with self.assertRaises(ValueError):
+            await web.fetch_photo(str(self.server.make_url("/groot")))
 
 
 class SessionTests(AioHTTPTestCase):

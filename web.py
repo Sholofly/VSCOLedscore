@@ -459,7 +459,8 @@ async def logs_data(request: web.Request) -> web.Response:
 
 
 def photo_id(url: str) -> str:
-    return hashlib.sha256(url.encode()).hexdigest()[:24]
+    # "v2": nieuwe adressen, zodat browsers geen eerder gecachte halve foto meer tonen.
+    return hashlib.sha256(f"v2:{url}".encode()).hexdigest()[:24]
 
 
 async def fetch_photo(url: str) -> tuple[bytes, str]:
@@ -470,9 +471,19 @@ async def fetch_photo(url: str) -> tuple[bytes, str]:
             content_type = response.headers.get("Content-Type", "").split(";")[0].strip()
             if response.status != 200 or not content_type.startswith("image/"):
                 raise ValueError(f"geen foto (HTTP {response.status}, {content_type or 'onbekend type'})")
-            data = await response.content.read(MAX_PHOTO_BYTES + 1)
-            if len(data) > MAX_PHOTO_BYTES:
-                raise ValueError("foto is te groot")
+            # Lees tot het einde: content.read(n) geeft alleen wat er al binnen is,
+            # waardoor je een halve foto krijgt.
+            chunks: list[bytes] = []
+            total = 0
+            async for chunk in response.content.iter_chunked(64 * 1024):
+                total += len(chunk)
+                if total > MAX_PHOTO_BYTES:
+                    raise ValueError("foto is te groot")
+                chunks.append(chunk)
+            data = b"".join(chunks)
+            expected = response.content_length
+            if expected is not None and len(data) != expected:
+                raise ValueError(f"foto onvolledig ontvangen ({len(data)} van {expected} bytes)")
             return data, content_type
 
 
