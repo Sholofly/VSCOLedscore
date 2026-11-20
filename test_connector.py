@@ -221,6 +221,28 @@ class ConnectorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.tokens_seen), 1)  # nog steeds dezelfde verbinding
         self.assertTrue(any("Could not parse" in l for l in logs.output))
 
+    async def test_stopping_always_ends_the_loop_even_while_the_server_keeps_closing(self):
+        # Regressie: een stopsignaal tijdens het opruimen van een verbinding werd
+        # ingeslikt, waarna de lus eindeloos bleef reconnecten (en docker stop hing).
+        import random
+
+        async def handler(websocket):
+            await websocket.send(status_message())
+            await websocket.close()
+
+        _, port = await self.server(handler)
+        for attempt in range(80):
+            state = ConnectionState()
+            settings = Settings(self.settings_path, f"ws://127.0.0.1:{port}/", "JWT x")
+            connector = Connector(settings, state)
+            connector.INITIAL_DELAY = connector.MAX_DELAY = 0.001
+            task = asyncio.create_task(connector.run())
+            await asyncio.sleep(random.uniform(0.0, 0.03))
+            task.cancel()
+            done, _ = await asyncio.wait({task}, timeout=2)
+            self.assertIn(task, done, f"loop stopte niet na annuleren (poging {attempt})")
+            self.assertTrue(task.cancelled())
+
     async def test_goal_without_scorer_is_reported_after_the_wait_while_connected(self):
         import app
 

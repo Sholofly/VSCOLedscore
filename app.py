@@ -485,11 +485,13 @@ class Connector:
                         return "closed"
                     self._handle(message, token, lifecycle)
             finally:
-                for task in (recv_task, change_task):
-                    if task is not None and not task.done():
-                        task.cancel()
-                        with contextlib.suppress(asyncio.CancelledError, Exception):
-                            await task
+                helpers = [task for task in (recv_task, change_task) if task is not None]
+                for task in helpers:
+                    task.cancel()
+                # gather met return_exceptions vangt de fouten van de hulptaken op, maar laat
+                # een stopsignaal voor deze taak zelf door. contextlib.suppress(CancelledError)
+                # zou dat stopsignaal inslikken, waarna de lus eindeloos doorgaat.
+                await asyncio.gather(*helpers, return_exceptions=True)
 
     def _handle(self, message: str | bytes, token: str, lifecycle: MatchLifecycle) -> None:
         text = message if isinstance(message, str) else message.decode("utf-8", "replace")
