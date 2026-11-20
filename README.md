@@ -112,45 +112,52 @@ met `Ctrl+C`.
 
 ## Webomgeving
 
-Inloggen doe je op de inlogpagina met `WEB_USER` en `WEB_PASSWORD`. Je blijft
-daarna 30 dagen ingelogd op dat apparaat (`SESSION_DAYS` in `.env`), ook na een
-herstart of update. Wijzig je `WEB_USER` of `WEB_PASSWORD`, dan moet iedereen
-opnieuw inloggen. Uitloggen kan rechtsboven. Scripts en tools kunnen ook HTTP
-Basic gebruiken. Formulieren hebben een CSRF-token, scripts zijn alleen met een
-nonce per pagina toegestaan en alle uitvoer wordt ge-escaped.
+De webomgeving is gemaakt voor de telefoon. Inloggen doe je op de inlogpagina
+met `WEB_USER` en `WEB_PASSWORD`. Je blijft daarna 30 dagen ingelogd op dat
+apparaat (`SESSION_DAYS` in `.env`), ook na een herstart of update. Wijzig je
+`WEB_USER` of `WEB_PASSWORD`, dan moet iedereen opnieuw inloggen. Uitloggen kan
+onderaan de pagina Status. Scripts en tools kunnen ook HTTP Basic gebruiken.
+Formulieren hebben een CSRF-token, scripts zijn alleen met een nonce per pagina
+toegestaan en alle uitvoer wordt ge-escaped.
 
-- **Status (startpagina):** de wedstrijdberichten met de knoppen "Plaats op X"
-  en "Deel met foto", en de verbindingsstatus (laatste bericht en fout, volgende
-  poging, URL, token met vervaldatum). Alles werkt zichzelf elke 2 seconden bij.
-- **Verbinding:** URL en token wijzigen. Het token staat verborgen in het veld
-  en maak je zichtbaar met het oog-icoon. Het staat alleen op deze pagina en
-  alleen na inloggen. Een wijziging bouwt de verbinding direct opnieuw op. De
-  URL mag geen `token=` bevatten.
-- **Berichten:** de teksten van alle berichten, met voorbeeld. Een leeg
+- **Berichten (startpagina):** alleen de wedstrijdberichten, nieuwste bovenaan,
+  met rechtsboven een statuslampje (groen = verbonden, oranje = bezig of
+  wachten, rood = fout; tik erop voor de statuspagina). De uitleg staat achter
+  "Hoe werkt delen?". Alles werkt zichzelf elke 2 seconden bij.
+  - **Delen:** bij elk bericht. Opent het deelmenu van je telefoon; kies daar X.
+    Zonder deelmenu (op een pc, of zonder HTTPS) opent X met de tekst al
+    ingevuld. De app heeft geen toegang tot je X-account nodig.
+  - **Foto meesturen:** bij een eigen doelpunt met doelpuntmaker staat een
+    preview van de foto (`goalImage`, anders `image`) en dit vinkje, standaard
+    aan. Uitgezet wordt de preview grijs en deel je alleen de tekst. Delen met
+    foto werkt alleen op een telefoon of tablet en **alleen via HTTPS**; op een
+    Synology regel je dat met de reverse proxy en een certificaat in DSM. De app
+    haalt de foto zelf op en geeft alleen foto's door die in een
+    wedstrijdbericht voorkomen. Let op: het gaat om foto's van spelers; of ze op
+    X mogen, bepaalt de club.
+  - Berichten boven 280 tekens worden gemarkeerd.
+- **Status:** verbindingsstatus, laatste bericht en fout, volgende poging, URL
+  en token (met vervaldatum als het een JWT met `exp` is), en de knop Uitloggen.
+- **Verbinding:** URL en token wijzigen, en de **wachttijd op de
+  doelpuntmaker** (standaard 20 seconden, 0 = niet wachten; geldt vanaf het
+  volgende doelpunt). Het token staat verborgen in het veld en maak je zichtbaar
+  met het oog-icoon; het staat alleen op deze pagina. Een nieuwe URL of een
+  nieuw token bouwt de verbinding direct opnieuw op. De URL mag geen `token=`
+  bevatten.
+- **Sjablonen:** de teksten van alle berichten, met voorbeeld. Een leeg
   sjabloon betekent dat dat bericht niet wordt verstuurd. Wijzigingen werken
   direct, zonder herstart.
-- **Logging:** live bijgewerkt (elke 2 seconden, zonder de pagina te herladen):
-  de laatste 300 regels van `app.log` (nieuwste bovenaan) en bij het laden de laatste 10 ruwe berichten,
-  ingekort. Kan het logbestand niet worden geschreven, dan toont de pagina de
-  regels sinds de laatste start.
-- **Plaats op X:** bij elk wedstrijdbericht op de startpagina staat een knop
-  die X (app of website) opent met het bericht al ingevuld. Je plaatst het daar
-  zelf; de app heeft geen toegang tot je X-account nodig. Berichten boven 280
-  tekens worden gemarkeerd.
-- **Deel met foto:** bij een eigen doelpunt met doelpuntmaker staat ook de foto
-  (`goalImage`, anders `image` uit de berichten) en een knop "Deel met foto". Die
-  opent het deelmenu van je telefoon met tekst en foto samen; kies daar X. Dat
-  werkt alleen op een telefoon of tablet en **alleen via HTTPS**, want browsers
-  staan delen anders niet toe. Op een Synology regel je HTTPS met de reverse
-  proxy en een certificaat in DSM. Zonder HTTPS toont de knop hoe je de foto
-  zelf opslaat. De app haalt de foto zelf op en geeft alleen foto's door die in
-  een wedstrijdbericht voorkomen. Let op: het gaat om foto's van spelers; of ze
-  op X mogen, bepaalt de club.
+- **Logging:** de laatste 300 regels van `app.log`, live bijgewerkt (nieuwste
+  bovenaan), en de laatste 10 ruwe berichten. Per ruw bericht zie je een
+  samenvatting (tijd, stand, helft en minuut); uitgeklapt zie je de
+  wedstrijdstatus (`scoreboard_data`) als ingesprongen JSON. Grote velden zoals
+  sponsors en teams staan alleen in het logbestand. Kan het logbestand niet
+  worden geschreven, dan toont de pagina de regels sinds de laatste start.
 
 ## Installeren als app
 
 De webomgeving is een installeerbare webapp, met een eigen icoon en zonder
-adresbalk. Dat werkt alleen via **HTTPS** (net als "Deel met foto").
+adresbalk. Dat werkt alleen via **HTTPS** (net als delen met foto).
 
 - **iPhone/iPad (Safari):** open de pagina, tik op Deel en kies "Zet op beginscherm".
 - **Android (Chrome):** open de pagina, kies in het menu "App installeren" of
@@ -178,7 +185,7 @@ Aanduidingen: `{minuut}`, `{thuis}`, `{uit}`, `{tegenstander}`, `{stand}`,
 een eigen doelpunt en `{blessuretijd}` bij het einde. Zie de pagina Berichten
 voor de uitleg.
 
-- Een eigen doelpunt wacht tot 20 seconden op de doelpuntmaker, die in een later
+- Een eigen doelpunt wacht tot 20 seconden (instelbaar op de pagina Verbinding) op de doelpuntmaker, die in een later
   bericht komt (sjabloon `goal_home`). Komt die niet, dan volgt het sjabloon
   zonder doelpuntmaker. Een doelpunt van de tegenstander wordt direct gemeld.
 - `AFGELOPEN!` in hoofdletters bij winst van de thuisploeg, anders `Afgelopen!`.

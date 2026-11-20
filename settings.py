@@ -19,6 +19,8 @@ from messages import DEFAULT_TEMPLATES, TEMPLATE_INFO, validate_template
 logger = logging.getLogger(__name__)
 
 MAX_TOKEN_LENGTH = 4096
+DEFAULT_GOAL_WAIT_SECONDS = 20
+MAX_GOAL_WAIT_SECONDS = 300
 MAX_URL_LENGTH = 2048
 
 
@@ -35,6 +37,17 @@ def validate_url(url: str) -> str:
     if any(key == "token" for key, _ in parse_qsl(parts.query)):
         raise ValueError("Zet het token niet in de URL; gebruik het tokenveld.")
     return url
+
+
+def validate_goal_wait(value: object) -> int:
+    """Wachttijd op de doelpuntmaker in hele seconden (0 = niet wachten)."""
+    try:
+        seconds = int(str(value).strip())
+    except ValueError:
+        raise ValueError("Vul een heel aantal seconden in.") from None
+    if not 0 <= seconds <= MAX_GOAL_WAIT_SECONDS:
+        raise ValueError(f"Kies een wachttijd van 0 tot {MAX_GOAL_WAIT_SECONDS} seconden.")
+    return seconds
 
 
 def validate_token(token: str) -> str:
@@ -63,6 +76,7 @@ class Settings:
         self.url = url.strip()
         self.token = token.strip()
         self.template_overrides: dict[str, str] = {}
+        self.goal_wait_seconds: float = DEFAULT_GOAL_WAIT_SECONDS
         # Wordt gezet als URL of token verandert, zodat de verbinding opnieuw opbouwt.
         self.connection_changed = asyncio.Event()
         self._load()
@@ -86,6 +100,11 @@ class Settings:
             self.url = raw["url"].strip()
         if isinstance(raw.get("token"), str) and raw["token"].strip():
             self.token = raw["token"].strip()
+        if "goal_wait_seconds" in raw and not isinstance(raw["goal_wait_seconds"], bool):
+            try:
+                self.goal_wait_seconds = validate_goal_wait(raw["goal_wait_seconds"])
+            except ValueError:
+                logger.error("Ongeldige wachttijd in het instellingenbestand; standaard gebruikt.")
         templates = raw.get("templates")
         if isinstance(templates, dict):
             self.template_overrides = {
@@ -103,6 +122,7 @@ class Settings:
             "url": self.url,
             "token": self.token,
             "templates": self.template_overrides,
+            "goal_wait_seconds": self.goal_wait_seconds,
         }
         handle, temp_name = tempfile.mkstemp(dir=self.path.parent, suffix=".tmp")
         try:
@@ -133,6 +153,13 @@ class Settings:
             self.token = token
             self._save()
             self.connection_changed.set()
+
+    def set_goal_wait(self, value: object) -> None:
+        """Geldt vanaf het volgende doelpunt; de verbinding hoeft niet opnieuw op."""
+        seconds = validate_goal_wait(value)
+        if seconds != self.goal_wait_seconds:
+            self.goal_wait_seconds = seconds
+            self._save()
 
     def set_templates(self, templates: dict[str, str]) -> None:
         """Sla sjablonen op; alleen afwijkingen van de standaard worden bewaard."""

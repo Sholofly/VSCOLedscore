@@ -12,6 +12,7 @@ import asyncio
 import hashlib
 import hmac
 import html
+import json
 import logging
 import os
 import secrets
@@ -31,7 +32,7 @@ from messages import (
     render_message,
     validate_template,
 )
-from settings import Settings, token_expiry
+from settings import MAX_GOAL_WAIT_SECONDS, Settings, token_expiry
 from state import ConnectionState, MemoryLogHandler
 
 logger = logging.getLogger(__name__)
@@ -53,31 +54,46 @@ MESSAGES = {
     "token": "Token opgeslagen. De verbinding wordt opnieuw opgebouwd.",
     "templates": "Sjablonen opgeslagen.",
     "reset": "Sjablonen hersteld naar de standaardteksten.",
+    "goal_wait": "Wachttijd opgeslagen. Hij geldt vanaf het volgende doelpunt.",
 }
 
 CSS = """
 :root{--bg:#f6f7f9;--card:#fff;--text:#1b1f24;--muted:#5b6670;--line:#d9dee4;
---accent:#1f5fbf;--ok:#1a7f37;--warn:#9a6700;--err:#c4302b;--code:#eef1f4}
+--accent:#1f5fbf;--on-accent:#fff;--ok:#1a7f37;--warn:#9a6700;--err:#c4302b;--code:#eef1f4}
 @media (prefers-color-scheme:dark){:root{--bg:#14171b;--card:#1d2127;--text:#e6e9ed;
---muted:#9aa5b1;--line:#2f353d;--accent:#6ea8ff;--ok:#4cc26a;--warn:#e0b341;
+--muted:#9aa5b1;--line:#2f353d;--accent:#6ea8ff;--on-accent:#0b1526;--ok:#4cc26a;--warn:#e0b341;
 --err:#ff7b72;--code:#262b32}}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,sans-serif}
 header{background:var(--card);border-bottom:1px solid var(--line)}
-nav{max-width:60rem;margin:0 auto;padding:0 16px;display:flex;gap:4px;flex-wrap:wrap}
-nav a{padding:14px 12px;color:var(--muted);text-decoration:none;border-bottom:3px solid transparent}
+nav{max-width:60rem;margin:0 auto;padding:0 8px;display:flex;gap:0;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}nav::-webkit-scrollbar{display:none}
+nav a{padding:14px 9px;color:var(--muted);text-decoration:none;border-bottom:3px solid transparent;white-space:nowrap;font-size:.95rem}
 nav a.active{color:var(--text);border-color:var(--accent)}
-nav .logout{margin-left:auto;align-self:center}nav .logout button{padding:4px 12px;font-size:.9rem}
+.logout{margin-top:4px}
 .login{max-width:24rem}
+.titlebar{display:flex;align-items:center;justify-content:space-between;gap:8px 12px;flex-wrap:wrap;margin:8px 0 12px}
+.titlebar h1{margin:0}
+.led-bar{display:inline-flex;align-items:center;gap:8px;min-height:36px;padding:4px 12px;border:1px solid var(--line);
+border-radius:99px;background:var(--card);color:var(--text);text-decoration:none;font-size:.9rem}
+.led{width:12px;height:12px;border-radius:50%;background:var(--muted);flex:none}
+.led.ok{background:var(--ok);box-shadow:0 0 8px var(--ok)}.led.warn{background:var(--warn);box-shadow:0 0 8px var(--warn)}
+.led.error{background:var(--err);box-shadow:0 0 8px var(--err)}
+details.intro{margin:0 0 12px;color:var(--muted);font-size:.92rem}
+details.intro summary{cursor:pointer;min-height:32px;display:flex;align-items:center;gap:6px;list-style:none}details.intro summary::-webkit-details-marker{display:none}details.intro summary::before{content:"";width:6px;height:6px;margin:0 4px 0 2px;border-right:2px solid currentColor;
+border-bottom:2px solid currentColor;transform:rotate(-45deg);transition:transform .15s}
+details.intro[open] summary::before{transform:rotate(45deg)}
+details.intro p{margin:4px 0 0}
+details.raw{border-bottom:1px solid var(--line);padding:8px 0}details.raw:last-child{border-bottom:0}
+details.raw summary{cursor:pointer;word-break:break-word}details.raw pre{margin-top:8px;max-height:60vh}input.num{max-width:8rem}
 main{max-width:60rem;margin:0 auto;padding:16px}
 h1{font-size:1.4rem;margin:8px 0 16px}h2{font-size:1.1rem;margin:0 0 8px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:16px;margin-bottom:16px}
 table{border-collapse:collapse;width:100%}td,th{text-align:left;padding:6px 8px;
 border-bottom:1px solid var(--line);vertical-align:top}th{width:14rem;color:var(--muted);font-weight:500}
 label{display:block;font-weight:600;margin:12px 0 4px}
-input[type=text],input[type=password],input[type=url]{width:100%;padding:8px;border:1px solid var(--line);
+input[type=text],input[type=password],input[type=url],input[type=number]{width:100%;padding:8px;border:1px solid var(--line);
 border-radius:6px;background:var(--bg);color:var(--text);font:inherit}
-button{padding:8px 16px;border:0;border-radius:6px;background:var(--accent);color:#fff;font:inherit;cursor:pointer}
+button{padding:8px 16px;border:0;border-radius:6px;background:var(--accent);color:var(--on-accent);font:inherit;cursor:pointer}
 button.secondary{background:transparent;color:var(--text);border:1px solid var(--line)}
 .msg{padding:10px 14px;border-radius:6px;margin-bottom:16px;border:1px solid var(--line)}
 .msg.ok{border-color:var(--ok);color:var(--ok)}.msg.error{border-color:var(--err);color:var(--err)}
@@ -88,12 +104,25 @@ pre,code{background:var(--code);border-radius:4px;font:13px/1.45 ui-monospace,mo
 pre{padding:10px;overflow:auto;white-space:pre-wrap;word-break:break-word;margin:0}code{padding:1px 5px}
 .preview{margin:4px 0 0;color:var(--muted)}.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
 .fielderr{color:var(--err);margin-top:4px}
-.tweets{list-style:none;margin:0;padding:0}.tweets li{padding:8px 0;border-bottom:1px solid var(--line)}
-.tweets li:last-child{border:0}.msg-text{word-break:break-word}
-a.tweet{display:inline-block;margin:0 6px;padding:2px 10px;border:1px solid var(--accent);border-radius:99px;
-color:var(--accent);text-decoration:none;white-space:nowrap}a.tweet:hover{background:var(--accent);color:var(--card)}
-img.thumb{display:block;max-width:160px;max-height:160px;border-radius:6px;margin:6px 0}
-button.share{padding:2px 10px;border-radius:99px;font-size:.95rem}
+.msgs{list-style:none;margin:0;padding:0}
+.msg-item{display:grid;grid-template-columns:1fr;gap:10px 12px;padding:14px 0;border-bottom:1px solid var(--line)}
+.msg-item:first-child{padding-top:4px}.msg-item:last-child{border-bottom:0;padding-bottom:0}
+.msg-item.has-photo{grid-template-columns:72px 1fr}
+.thumb{width:72px;height:72px;object-fit:cover;border-radius:10px;background:var(--code);
+transition:opacity .2s,filter .2s}
+.msg-item:has(.with-photo:not(:checked)) .thumb{opacity:.35;filter:grayscale(1)}
+.msg-body{min-width:0}
+.msg-meta{display:flex;justify-content:space-between;gap:8px;font-size:.85rem;color:var(--muted)}
+.msg-meta .too-long{color:var(--err);font-weight:600}
+.msg-text{margin:2px 0 0;word-break:break-word;font-size:1.02rem}
+.msg-actions{grid-column:1/-1;display:flex;align-items:center;gap:12px}
+.msg-actions .share{flex:1;min-height:44px;display:inline-flex;align-items:center;justify-content:center;
+gap:8px;font-weight:600;border-radius:10px}
+.msg-actions .share svg{flex:none}
+.photo-toggle{display:flex;align-items:center;gap:8px;min-height:44px;padding:0 4px;white-space:nowrap;
+font-size:.95rem;cursor:pointer;-webkit-user-select:none;user-select:none}
+.photo-toggle input{width:22px;height:22px;margin:0;accent-color:var(--accent)}
+.item-hint{grid-column:1/-1;margin:0;color:var(--err);font-size:.9rem}.item-hint:empty{display:none}
 .pw{position:relative}.pw input{padding-right:48px}
 .reveal{position:absolute;right:4px;top:50%;transform:translateY(-50%);background:transparent;
 border:0;color:var(--muted);padding:8px;line-height:0;border-radius:6px}
@@ -110,25 +139,37 @@ REVEAL_JS = (
 )
 LIVE_JS = """(function(){
 var m=document.getElementById('live-messages'),l=document.getElementById('live-log'),
-n=document.getElementById('live-note'),s=document.getElementById('live-status'),
-t=document.getElementById('live-table'),h=document.getElementById('share-hint'),
-last=m?m.innerHTML:'',lastTable=t?t.innerHTML:'',files=new Map();
-var HINT='Delen met foto werkt alleen op een telefoon of tablet, en alleen als je deze pagina via HTTPS opent. '
-+'Houd de foto ingedrukt om hem op te slaan en gebruik "Plaats op X".';
-function prefetch(){if(!m)return;m.querySelectorAll('.share[data-photo]').forEach(function(b){var u=b.dataset.photo;
+n=document.getElementById('live-note'),dot=document.querySelector('#led .led'),lt=document.getElementById('led-text'),
+t=document.getElementById('live-table'),
+last=m?m.innerHTML:'',lastTable=t?t.innerHTML:'',files=new Map(),photoOff=new Set();
+var NO_MENU='Het deelmenu werkt alleen op een telefoon of tablet via HTTPS. X is geopend met de tekst';
+function prefetch(){if(!m)return;m.querySelectorAll('.msg-item[data-photo]').forEach(function(li){var u=li.dataset.photo;
 if(files.has(u))return;files.set(u,null);fetch(u).then(function(r){if(!r.ok)throw 0;return r.blob();})
 .then(function(x){var e=(x.type.split('/')[1]||'jpg').split('+')[0];files.set(u,new File([x],'doelpunt.'+e,{type:x.type}));})
 .catch(function(){files.delete(u);});});}
-if(m)m.addEventListener('click',function(ev){var b=ev.target.closest('.share');if(!b)return;ev.preventDefault();
-var f=files.get(b.dataset.photo),data={text:b.dataset.text};if(f)data.files=[f];
-if(!f||!navigator.canShare||!navigator.canShare(data)){h.textContent=f?HINT:'De foto wordt nog geladen; probeer het zo opnieuw. '+HINT;return;}
-h.textContent='';navigator.share(data).catch(function(e){if(e&&e.name!=='AbortError')h.textContent=HINT;});});
+function restore(){if(!m)return;m.querySelectorAll('.msg-item').forEach(function(li){
+var c=li.querySelector('.with-photo');if(c)c.checked=!photoOff.has(li.dataset.key);});}
+function share(li){var hint=li.querySelector('.item-hint'),c=li.querySelector('.with-photo'),
+want=!!(c&&c.checked&&li.dataset.photo),f=want?files.get(li.dataset.photo):null,
+data={text:li.dataset.text},note='';hint.textContent='';
+if(navigator.share){
+if(want&&!f){hint.textContent='De foto wordt nog geladen; probeer het zo opnieuw.';return;}
+if(f){data.files=[f];if(navigator.canShare&&!navigator.canShare(data)){data={text:li.dataset.text};
+note='Deze browser kan geen foto delen; alleen de tekst is gedeeld.';}}
+navigator.share(data).then(function(){hint.textContent=note;})
+.catch(function(e){if(e&&e.name!=='AbortError')hint.textContent='Delen mislukt: '+(e.message||e.name);});return;}
+window.open(li.dataset.fallback,'_blank','noopener');
+hint.textContent=NO_MENU+(want?'; voeg de foto daar zelf toe (houd de foto ingedrukt om hem op te slaan).':'.');}
+if(m){m.addEventListener('click',function(ev){var b=ev.target.closest('.share');if(!b)return;
+ev.preventDefault();share(b.closest('.msg-item'));});
+m.addEventListener('change',function(ev){if(!ev.target.classList.contains('with-photo'))return;
+var k=ev.target.closest('.msg-item').dataset.key;if(ev.target.checked)photoOff.delete(k);else photoOff.add(k);});}
 function tick(){fetch('/logs/data',{cache:'no-store'}).then(function(r){if(!r.ok)throw 0;return r.json();})
-.then(function(d){if(m&&d.messages_html!==last){m.innerHTML=d.messages_html;last=d.messages_html;prefetch();}
+.then(function(d){if(m&&d.messages_html!==last){m.innerHTML=d.messages_html;last=d.messages_html;restore();prefetch();}
 if(t&&d.status_html!==lastTable){t.innerHTML=d.status_html;lastTable=d.status_html;}
 if(l)l.textContent=d.app;if(n)n.textContent=d.note;
-s.textContent='Live, bijgewerkt '+new Date().toLocaleTimeString();s.className='pill ok';})
-.catch(function(){s.textContent='Verbinding met de pagina verloren';s.className='pill error';});}
+if(dot){dot.className='led '+d.led.level;lt.textContent=d.led.status;}})
+.catch(function(){if(dot){dot.className='led off';lt.textContent='app niet bereikbaar';}});}
 prefetch();tick();setInterval(tick,2000);})();"""
 EYE_ICONS = (
     '<svg class="eye-open" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
@@ -141,7 +182,13 @@ EYE_ICONS = (
     '<path d="M14.12 14.12A3 3 0 1 1 9.88 9.88"/><path d="M1 1l22 22"/></svg>'
 )
 
-NAV = (("/", "Status"), ("/settings", "Verbinding"), ("/templates", "Berichten"), ("/logs", "Logging"))
+NAV = (
+    ("/", "Berichten"),
+    ("/status", "Status"),
+    ("/settings", "Verbinding"),
+    ("/templates", "Sjablonen"),
+    ("/logs", "Logging"),
+)
 
 
 def esc(value: object) -> str:
@@ -200,16 +247,13 @@ def page(
     refresh: int = 0,
     script: str = "",
     show_nav: bool = True,
+    aside: str = "",
 ) -> web.Response:
     links = "".join(
         f'<a href="{path}"{" class=active" if path == active else ""}>{label}</a>'
         for path, label in NAV
     )
-    logout = (
-        '<form method="post" action="/logout" class="logout">'
-        f'{csrf_field(request)}<button type="submit" class="secondary">Uitloggen</button></form>'
-    )
-    nav = f"<header><nav>{links}{logout}</nav></header>" if show_nav else ""
+    nav = f"<header><nav>{links}</nav></header>" if show_nav else ""
     meta = f'<meta http-equiv="refresh" content="{refresh}">' if refresh else ""
     nonce = esc(request["nonce"])
     script_tag = f'<script nonce="{nonce}">{SW_REGISTER_JS}{script}</script>'
@@ -217,7 +261,8 @@ def page(
         '<!doctype html><html lang="nl"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
         f"{APP_HEAD}{meta}<title>{esc(title)} - VSCO scorebord</title><style>{CSS}</style></head>"
-        f"<body>{nav}<main><h1>{esc(title)}</h1>{body}</main>{script_tag}</body></html>"
+        f'<body>{nav}<main><div class="titlebar"><h1>{esc(title)}</h1>{aside}</div>{body}</main>'
+        f"{script_tag}</body></html>"
     )
     return web.Response(text=document, content_type="text/html")
 
@@ -265,23 +310,45 @@ def status_table_html(app: web.Application) -> str:
     return "<table>" + "".join(f"<tr><th>{k}</th><td>{v}</td></tr>" for k, v in rows) + "</table>"
 
 
+def led_html(state: ConnectionState) -> str:
+    """Statuslampje; tikken opent de statuspagina. Wordt live bijgewerkt."""
+    return (
+        '<a id="led" class="led-bar" href="/status" title="Status van de verbinding">'
+        f'<span class="led {esc(state.level)}" aria-hidden="true"></span>'
+        f'<span id="led-text">{esc(state.status)}</span></a>'
+    )
+
+
+async def messages_page(request: web.Request) -> web.Response:
+    live = live_logs(request.app)
+    body = (
+        '<details class="intro"><summary>Hoe werkt delen?</summary>'
+        "<p>De berichten sinds de laatste start, nieuwste bovenaan. Ze verschijnen vanzelf. "
+        '"Delen" opent het deelmenu van je telefoon (via HTTPS), met de foto als "Foto meesturen" '
+        "is aangevinkt. Zonder deelmenu, bijvoorbeeld op een pc, opent X met de tekst al ingevuld.</p></details>"
+        f'<div class="card"><div id="live-messages">{live["messages_html"]}</div></div>'
+    )
+    return page(request, "Berichten", "/", body, script=LIVE_JS, aside=led_html(request.app["state"]))
+
+
 async def status_page(request: web.Request) -> web.Response:
     live = live_logs(request.app)
     body = (
-        '<p><span id="live-status" class="pill warn">Live-weergave starten...</span> '
-        '<span class="muted small">Werkt vanzelf bij.</span></p>'
-        '<div class="card"><h2>Wedstrijdberichten</h2>'
-        '<p class="muted small">Sinds de laatste start, nieuwste bovenaan. '
-        '"Plaats op X" opent X met het bericht al ingevuld; je plaatst het daar zelf. '
-        '"Deel met foto" opent het deelmenu van je telefoon met tekst en foto (alleen via HTTPS).</p>'
-        f'<div id="live-messages">{live["messages_html"]}</div>'
-        '<p id="share-hint" class="fielderr small" role="status"></p></div>'
-        f'<div class="card"><h2>Verbinding</h2><div id="live-table">{live["status_html"]}</div></div>'
+        f'<div class="card"><div id="live-table">{live["status_html"]}</div></div>'
+        '<form method="post" action="/logout" class="logout">'
+        f'{csrf_field(request)}<button type="submit" class="secondary">Uitloggen</button></form>'
     )
-    return page(request, "Status", "/", body, script=LIVE_JS)
+    return page(request, "Status", "/status", body, script=LIVE_JS, aside=led_html(request.app["state"]))
 
 
-def settings_form(request: web.Request, url_error: str = "", token_error: str = "", url_value: str | None = None) -> str:
+def settings_form(
+    request: web.Request,
+    url_error: str = "",
+    token_error: str = "",
+    url_value: str | None = None,
+    wait_error: str = "",
+    wait_value: str | None = None,
+) -> str:
     settings: Settings = request.app["settings"]
     shown = display_url(settings.url) if url_value is None else url_value
     return (
@@ -302,6 +369,17 @@ def settings_form(request: web.Request, url_error: str = "", token_error: str = 
         f'aria-label="Toon token" aria-pressed="false">{EYE_ICONS}</button></div>'
         f'{message_box(token_error, "error")}'
         '<div class="row"><button type="submit">Token opslaan</button></div></form></div>'
+        '<div class="card"><h2>Wachten op de doelpuntmaker</h2>'
+        '<p class="muted small">Na een eigen doelpunt wacht de app zo lang op de naam van de doelpuntmaker. '
+        "Komt die niet, dan volgt het bericht zonder naam. 0 = niet wachten.</p>"
+        '<form method="post" action="/settings">'
+        f'{csrf_field(request)}<input type="hidden" name="action" value="goal_wait">'
+        '<label for="goal_wait">Wachttijd (seconden)</label>'
+        f'<input type="number" id="goal_wait" name="goal_wait" class="num" min="0" max="{MAX_GOAL_WAIT_SECONDS}" '
+        'step="1" inputmode="numeric" required '
+        f'value="{esc(wait_value if wait_value is not None else int(settings.goal_wait_seconds))}">'
+        f'{message_box(wait_error, "error")}'
+        '<div class="row"><button type="submit">Wachttijd opslaan</button></div></form></div>'
     )
 
 
@@ -320,12 +398,18 @@ async def settings_post(request: web.Request) -> web.Response:
         elif action == "token":
             settings.set_token(str(form.get("token", "")))
             logger.info("Token gewijzigd via de webomgeving")
+        elif action == "goal_wait":
+            settings.set_goal_wait(form.get("goal_wait", ""))
+            logger.info("Wachttijd op de doelpuntmaker gewijzigd naar %s seconden", settings.goal_wait_seconds)
         else:
             raise ValueError("Onbekende actie.")
     except ValueError as error:
-        kwargs = {"token_error": str(error)} if action == "token" else {"url_error": str(error)}
-        if action == "url":
-            kwargs["url_value"] = str(form.get("url", ""))
+        if action == "token":
+            kwargs = {"token_error": str(error)}
+        elif action == "goal_wait":
+            kwargs = {"wait_error": str(error), "wait_value": str(form.get("goal_wait", ""))}
+        else:
+            kwargs = {"url_error": str(error), "url_value": str(form.get("url", ""))}
         response = page(
             request, "Verbinding", "/settings", settings_form(request, **kwargs), script=REVEAL_JS
         )
@@ -368,7 +452,7 @@ def templates_form(request: web.Request, values: dict[str, str], errors: dict[st
 
 async def templates_page(request: web.Request) -> web.Response:
     settings: Settings = request.app["settings"]
-    return page(request, "Berichten", "/templates", templates_form(request, settings.templates, {}))
+    return page(request, "Sjablonen", "/templates", templates_form(request, settings.templates, {}))
 
 
 async def templates_post(request: web.Request) -> web.Response:
@@ -379,7 +463,7 @@ async def templates_post(request: web.Request) -> web.Response:
     }
     errors = {key: error for key in TEMPLATE_INFO if (error := validate_template(key, submitted[key]))}
     if errors:
-        response = page(request, "Berichten", "/templates", templates_form(request, submitted, errors))
+        response = page(request, "Sjablonen", "/templates", templates_form(request, submitted, errors))
         response.set_status(400)
         return response
     settings.set_templates(submitted)
@@ -398,30 +482,43 @@ def post_url(text: str) -> str:
     return POST_URL + quote(text, safe="")
 
 
+SHARE_ICON = (
+    '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+    '<path d="M4 12v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7"/><path d="M16 6l-4-4-4 4"/><path d="M12 2v13"/></svg>'
+)
+
+
 def messages_html(messages: list[dict]) -> str:
+    """Eén blok per bericht: (foto), tijd + teller, tekst, en een rij met Delen en het foto-vinkje."""
     if not messages:
         return '<p class="muted">(nog geen wedstrijdberichten)</p>'
     items = []
     for item in messages:
         too_long = item["length"] > TWEET_LIMIT
         counter = (
-            f'<span class="small {"fielderr" if too_long else "muted"}">'
+            f'<span class="{"too-long" if too_long else ""}">'
             f'{item["length"]}/{TWEET_LIMIT}{" - te lang voor X" if too_long else ""}</span>'
         )
-        photo = ""
-        if item.get("photo"):
-            photo = (
-                f'<img class="thumb" src="{esc(item["photo"])}" alt="Foto van de doelpuntmaker" loading="lazy">'
-                f'<button type="button" class="share" data-photo="{esc(item["photo"])}" '
-                f'data-text="{esc(item["text"])}">Deel met foto</button>'
+        photo = item.get("photo")
+        thumb = toggle = photo_attr = ""
+        if photo:
+            thumb = f'<img class="thumb" src="{esc(photo)}" alt="Foto van de doelpuntmaker" width="72" height="72">'
+            toggle = (
+                '<label class="photo-toggle"><input type="checkbox" class="with-photo" checked> '
+                "Foto meesturen</label>"
             )
+            photo_attr = f' data-photo="{esc(photo)}"'
         items.append(
-            f'<li><span class="muted">{esc(item["time"])}</span> '
-            f'<span class="msg-text">{esc(item["text"])}</span> '
-            f'<a class="tweet" href="{esc(item["url"])}" target="_blank" rel="noopener noreferrer">'
-            f"Plaats op X</a>{photo} {counter}</li>"
+            f'<li class="msg-item{" has-photo" if photo else ""}" data-key="{esc(item["key"])}" '
+            f'data-text="{esc(item["text"])}" data-fallback="{esc(item["url"])}"{photo_attr}>'
+            f"{thumb}"
+            f'<div class="msg-body"><div class="msg-meta"><span>{esc(item["time"])}</span>{counter}</div>'
+            f'<p class="msg-text">{esc(item["text"])}</p></div>'
+            f'<div class="msg-actions"><button type="button" class="share">{SHARE_ICON}Delen</button>{toggle}</div>'
+            '<p class="item-hint" role="status"></p></li>'
         )
-    return f'<ul class="tweets">{"".join(items)}</ul>'
+    return f'<ul class="msgs">{"".join(items)}</ul>'
 
 
 def live_logs(app: web.Application) -> dict:
@@ -442,6 +539,8 @@ def live_logs(app: web.Application) -> dict:
             "url": post_url(text),
             "length": len(text),
             "photo": f"/photo/{photo_id(image)}" if image else None,
+            # Vaste sleutel per bericht, zodat het foto-vinkje een live-update overleeft.
+            "key": hashlib.sha256(f"{moment.isoformat()}|{text}".encode()).hexdigest()[:12],
         }
         for moment, text, image in reversed(app["state"].messages)
     ]
@@ -449,6 +548,7 @@ def live_logs(app: web.Application) -> dict:
         "messages": messages,
         "messages_html": messages_html(messages),
         "status_html": status_table_html(app),
+        "led": {"level": app["state"].level, "status": app["state"].status},
         "app": "\n".join(reversed(app_lines)) or "(nog geen logregels)",
         "note": note,
     }
@@ -515,28 +615,88 @@ async def photo(request: web.Request) -> web.Response:
     )
 
 
+def raw_summary(data: dict) -> str:
+    """Korte samenvatting van een ruw bericht: stand en fase van de wedstrijd."""
+    sd = data.get("scoreboard_data") if isinstance(data, dict) else None
+    if not isinstance(sd, dict):
+        return "geen wedstrijdstatus"
+    names = {
+        team.get("id"): team.get("scoreboard_name") or team.get("name")
+        for team in data.get("teams") or []
+        if isinstance(team, dict)
+    }
+    ids = sd.get("teams") if isinstance(sd.get("teams"), dict) else {}
+    board = sd.get("scoreboard") if isinstance(sd.get("scoreboard"), dict) else {}
+    home = names.get(ids.get("home")) or "Thuis"
+    away = names.get(ids.get("away")) or "Uit"
+    score = f"{home} {board.get('home', '?')}-{board.get('away', '?')} {away}"
+    seconds = sd.get("time")
+    if isinstance(seconds, (int, float)) and not isinstance(seconds, bool):
+        clock = f"{int(seconds) // 60}:{int(seconds) % 60:02d}"
+    else:
+        clock = "?"
+    if sd.get("endedAt"):
+        phase = "afgelopen"
+    elif sd.get("rest"):
+        phase = "rust"
+    elif sd.get("startedAt"):
+        period = sd.get("period") if isinstance(sd.get("period"), int) else 0
+        phase = f"{period + 1}e helft {clock}"
+    else:
+        phase = "niet gestart"
+    return f"{score} · {phase}"
+
+
+def raw_entries_html(lines: list[str]) -> str:
+    """De laatste ruwe berichten, per stuk uitklapbaar met ingesprongen JSON van de wedstrijdstatus."""
+    if not lines:
+        return (
+            '<p class="muted">(geen ruwe berichten; staat het logbestand niet op schijf, '
+            "dan is de logmap niet schrijfbaar)</p>"
+        )
+    items = []
+    for line in reversed(lines):
+        stamp, _, rest = line.partition(" {")
+        moment = stamp[11:19] if len(stamp) >= 19 else stamp
+        try:
+            data = json.loads("{" + rest)
+        except ValueError:
+            shown = line if len(line) <= RAW_ENTRY_CHARS else f"{line[:RAW_ENTRY_CHARS]} ... [ingekort]"
+            items.append(
+                f'<details class="raw"><summary><span class="muted">{esc(moment)}</span> '
+                f"geen geldige JSON</summary><pre>{esc(shown)}</pre></details>"
+            )
+            continue
+        status = data.get("scoreboard_data") if isinstance(data, dict) else data
+        pretty = json.dumps(status, ensure_ascii=False, indent=2, sort_keys=True)
+        other = sorted(k for k in data if k != "scoreboard_data") if isinstance(data, dict) else []
+        extra = (
+            f'<p class="muted small">Weggelaten (staat in het logbestand): {esc(", ".join(other))}.</p>'
+            if other
+            else ""
+        )
+        size = f'<span class="muted small">({len(line) // 1024} KB)</span>'
+        items.append(
+            f'<details class="raw"><summary><span class="muted">{esc(moment)}</span> '
+            f"{esc(raw_summary(data))} {size}</summary>"
+            f"<pre>{esc(pretty)}</pre>{extra}</details>"
+        )
+    return "".join(items)
+
+
 async def logs_page(request: web.Request) -> web.Response:
     live = live_logs(request.app)
     raw_lines = tail_lines(request.app["raw_log"], RAW_LOG_ENTRIES, max_bytes=3_000_000)
-    raw_entries = [
-        line if len(line) <= RAW_ENTRY_CHARS else f"{line[:RAW_ENTRY_CHARS]} ... [{len(line)} tekens, ingekort]"
-        for line in reversed(raw_lines)
-    ]
-    raw_text = "\n\n".join(raw_entries) or (
-        "(geen ruwe berichten; staat het logbestand niet op schijf, dan is de logmap niet schrijfbaar)"
-    )
     body = (
-        '<p><span id="live-status" class="pill warn">Live-weergave starten...</span> '
-        '<span class="muted small">Werkt vanzelf bij. De wedstrijdberichten staan op de pagina Status.</span></p>'
         '<div class="card"><h2>Berichten en fouten</h2>'
         f'<p id="live-note" class="muted small">{esc(live["note"])}</p>'
         f'<pre id="live-log">{esc(live["app"])}</pre></div>'
         '<div class="card"><h2>Ruwe websocketberichten</h2>'
-        f'<p class="muted small">De laatste {RAW_LOG_ENTRIES}, ingekort, bij het laden van de pagina. '
-        "Het volledige bestand staat in de logmap.</p>"
-        f"<pre>{esc(raw_text)}</pre></div>"
+        f'<p class="muted small">De laatste {RAW_LOG_ENTRIES}, bij het laden van de pagina. Tik op een bericht '
+        "voor de wedstrijdstatus (<code>scoreboard_data</code>).</p>"
+        f"{raw_entries_html(raw_lines)}</div>"
     )
-    return page(request, "Logging", "/logs", body, script=LIVE_JS)
+    return page(request, "Logging", "/logs", body, script=LIVE_JS, aside=led_html(request.app["state"]))
 
 
 async def health(request: web.Request) -> web.Response:
@@ -800,7 +960,8 @@ def create_web_app(
             web.get("/manifest.webmanifest", manifest),
             web.get("/sw.js", service_worker),
             web.static("/static", STATIC_DIR, append_version=False),
-            web.get("/", status_page),
+            web.get("/", messages_page),
+            web.get("/status", status_page),
             web.get("/settings", settings_page),
             web.post("/settings", settings_post),
             web.get("/templates", templates_page),

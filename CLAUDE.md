@@ -2,7 +2,7 @@
 
 Python 3.13-app die verbindt met de VSCO-scorebord-websocket (ledscores),
 wedstrijdgebeurtenissen herkent en die als berichten toont in een webomgeving
-(met "Plaats op X" en "Deel met foto"). Draait in Docker op een Synology-NAS.
+voor de telefoon (met een Delen-knop en optioneel de foto van de doelpuntmaker). Draait in Docker op een Synology-NAS.
 Gebruikersdocumentatie staat in [README.md](README.md).
 
 ## Afspraken met de gebruiker
@@ -66,7 +66,8 @@ Elk bericht is de volledige status (~175 KB JSON). Relevant in `scoreboard_data`
 ## Gedrag dat bewust zo is
 
 - De eerste ontvangen status is de beginsituatie: geen meldingen achteraf.
-- Eigen doelpunt wacht tot 20 s (`GOAL_WAIT_SECONDS`) op de doelpuntmaker en
+- Eigen doelpunt wacht tot 20 s op de doelpuntmaker (instelbaar op de pagina
+  Verbinding, `Settings.goal_wait_seconds`; per doelpunt opgevraagd) en
   wordt dan als één bericht gemeld; doelpunt tegenstander direct.
 - Stand omlaag = correctie: wachtend doelpunt vervalt, geen melding.
 - Bij een reconnect blijft de wedstrijdstatus bewaard; bij een andere URL niet.
@@ -88,6 +89,15 @@ Elk bericht is de volledige status (~175 KB JSON). Relevant in `scoreboard_data`
 - `logs/` (ruwe berichten met spelersnamen), `data/` en `.env` staan in
   `.gitignore`; zet nooit echte spelersnamen of tokens in tests of commits.
 
+## Webomgeving
+
+- Gemaakt voor de telefoon: grote tikvlakken (min. 44 px), navigatie op één
+  regel, controleer opmaak op ~390 px breed. Een schermafbeelding kan met Edge
+  zonder venster (`msedge --headless=new --screenshot`); Edge heeft een minimale
+  vensterbreedte van ~500 px, dus zet de pagina zelf op `width:390px`.
+- Pagina's: `/` berichten + statuslampje, `/status`, `/settings` (Verbinding),
+  `/templates` (Sjablonen), `/logs`. Live-updates via `/logs/data` (JSON).
+
 ## Valkuilen die al eens fout gingen
 
 - `contextlib.suppress(asyncio.CancelledError)` rond het afwachten van een taak
@@ -100,5 +110,10 @@ Elk bericht is de volledige status (~175 KB JSON). Relevant in `scoreboard_data`
 - Bij timinggevoelige fouten: controleer dat een regressietest de oude code
   echt laat falen (bv. de oude versie via `git show HEAD:bestand` in een
   scratchmap testen).
+- Een CSS-escape zoals backslash-25B8 in een gewone Python-string wordt een
+  octale escape (stuurteken). Gebruik geen backslash-escapes in CSS/JS-strings
+  of gebruik een getekend alternatief; een test controleert op stuurtekens.
+- Patchen via een bash-heredoc maakt van backslash-n soms een echte regelovergang
+  in de code. Schrijf zulke patches liever via de editor of een scriptbestand.
 - Op de NAS kan `./logs` onschrijfbaar zijn (uid 1000); de app logt dan alleen
   naar console en geheugen, en de webomgeving valt daarop terug.

@@ -250,19 +250,15 @@ class ConnectorTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(task.cancelled())
 
     async def test_goal_without_scorer_is_reported_after_the_wait_while_connected(self):
-        import app
-
         async def handler(websocket):
             await websocket.send(status_message())
             await asyncio.sleep(0.05)
             await websocket.send(status_message(away_score=0).replace('"home": 0', '"home": 1'))
             await websocket.wait_closed()
 
-        original = app.GOAL_WAIT_SECONDS
-        app.GOAL_WAIT_SECONDS = 0.2
-        self.addCleanup(setattr, app, "GOAL_WAIT_SECONDS", original)
         _, port = await self.server(handler)
         settings, connector = self.make_connector(f"ws://127.0.0.1:{port}/")
+        settings.goal_wait_seconds = 0.2  # de wachttijd uit de instellingen (webapp) wordt gebruikt
         with self.assertLogs("app", level="INFO") as logs:
             await self.start(connector)
             await wait_for(lambda: any("DOELPUNT Home FC!" in l for l in logs.output))

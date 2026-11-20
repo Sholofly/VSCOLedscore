@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 raw_logger = logging.getLogger(f"{__name__}.raw")
 raw_logger.propagate = False  # ruwe berichten nooit naar de console
 
-GOAL_WAIT_SECONDS = 20.0  # zo lang wachten op de doelpuntmaker
+GOAL_WAIT_SECONDS = 20.0  # standaard wachttijd op de doelpuntmaker (instelbaar in de webapp)
 MAX_MESSAGE_BYTES = 8 * 1024 * 1024
 
 
@@ -124,8 +124,11 @@ class MatchLifecycle:
         self,
         regular_minutes: int = 90,
         templates: Mapping[str, str] | Callable[[], Mapping[str, str]] | None = None,
+        goal_wait: Callable[[], float] | None = None,
     ) -> None:
         self.regular_minutes = regular_minutes
+        # Per doelpunt opgevraagd, zodat een wijziging in de webapp direct geldt.
+        self._goal_wait: Callable[[], float] = goal_wait or (lambda: GOAL_WAIT_SECONDS)
         if templates is None:
             self._templates: Callable[[], Mapping[str, str]] = lambda: DEFAULT_TEMPLATES
         elif callable(templates):
@@ -227,7 +230,7 @@ class MatchLifecycle:
                 events.extend(self._render("goal_away", context))
             elif is_active and not started and scored_side == "home":
                 events.extend(self.flush_pending())
-                self.pending_goal = (context, now + GOAL_WAIT_SECONDS)
+                self.pending_goal = (context, now + self._goal_wait())
             # Alleen de doelpuntmaker van de eigen (thuis)ploeg wordt gebruikt.
             for key in sorted(scorers.keys() - self.scorers.keys()):
                 side, _, name = key
@@ -389,7 +392,9 @@ class Connector:
         # blijft de status bewaard, zodat gemiste wijzigingen alsnog worden gemeld.
         if self._lifecycle is None or self._lifecycle_url != url:
             self._lifecycle = MatchLifecycle(
-                self.regular_minutes, lambda: self.settings.templates
+                self.regular_minutes,
+                lambda: self.settings.templates,
+                goal_wait=lambda: self.settings.goal_wait_seconds,
             )
             self._lifecycle_url = url
         return self._lifecycle

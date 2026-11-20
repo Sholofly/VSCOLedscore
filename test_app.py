@@ -197,6 +197,23 @@ class GoalTests(unittest.TestCase):
             (event,) = lifecycle.update(goal, now=1)
             self.assertEqual(event.image, expected)
 
+    def test_goal_wait_is_read_per_goal_so_changes_apply_to_the_next_goal(self):
+        wait = [20]
+        lifecycle = MatchLifecycle(goal_wait=lambda: wait[0])
+        lifecycle.update(self.payload(started_at=START), now=0)
+        lifecycle.update(self.payload(started_at=START, home_score=1), now=100)
+        self.assertEqual(lifecycle.next_deadline, 120)
+        wait[0] = 5  # gewijzigd in de webapp
+        self.assertEqual(lifecycle.next_deadline, 120)  # lopend doelpunt houdt zijn wachttijd
+        lifecycle.update(self.payload(started_at=START, home_score=2), now=110)  # meldt het eerste
+        self.assertEqual(lifecycle.next_deadline, 115)
+
+    def test_zero_wait_reports_a_goal_without_scorer_right_away(self):
+        lifecycle = MatchLifecycle(goal_wait=lambda: 0)
+        lifecycle.update(self.payload(started_at=START), now=0)
+        self.assertEqual(lifecycle.update(self.payload(started_at=START, home_score=1), now=5), [])
+        self.assertEqual(lifecycle.flush_expired(now=5), [f"'1 DOELPUNT Home FC! {trailer(1)}"])
+
     def test_scorer_in_same_message_as_goal(self):
         goal = self.with_scorer(self.payload(started_at=START, home_score=1, seconds=30))
         self.assertEqual(

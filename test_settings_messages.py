@@ -122,6 +122,30 @@ class SettingsTests(unittest.IsolatedAsyncioTestCase):
         self.path.write_text(json.dumps({"templates": {"start": "{nonsens}", "x": "y"}}), encoding="utf-8")
         self.assertEqual(self.make().templates, DEFAULT_TEMPLATES)
 
+    def test_goal_wait_defaults_to_20_validates_and_is_saved(self):
+        settings = self.make()
+        self.assertEqual(settings.goal_wait_seconds, 20)
+        settings.set_goal_wait("45")
+        self.assertEqual(self.make().goal_wait_seconds, 45)
+        for bad in ("", "abc", "-1", "301", "2.5", None):
+            with self.assertRaises(ValueError, msg=bad):
+                settings.set_goal_wait(bad)
+        self.assertEqual(settings.goal_wait_seconds, 45)
+        settings.set_goal_wait(0)  # 0 = niet wachten
+        self.assertEqual(self.make().goal_wait_seconds, 0)
+
+    def test_changing_goal_wait_does_not_reconnect(self):
+        settings = self.make()
+        settings.set_goal_wait(30)
+        self.assertFalse(settings.connection_changed.is_set())
+
+    def test_invalid_goal_wait_in_file_falls_back_to_default(self):
+        self.path.parent.mkdir(parents=True)
+        for bad in (9999, "x", True, -5):
+            self.path.write_text(json.dumps({"goal_wait_seconds": bad}), encoding="utf-8")
+            with self.assertNoLogs("settings", level="CRITICAL"):
+                self.assertEqual(self.make().goal_wait_seconds, 20, bad)
+
     def test_no_temporary_files_are_left_behind(self):
         self.make().set_token("JWT abc")
         self.assertEqual([p.name for p in self.path.parent.iterdir()], ["settings.json"])

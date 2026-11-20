@@ -51,7 +51,7 @@ class WebTests(AioHTTPTestCase):
     async def test_pages_render_and_only_the_connection_page_contains_the_token(self):
         self.state.set("verbonden", "ok")
         self.state.record_error("iets misgegaan")
-        for path in ("/", "/settings", "/templates", "/logs"):
+        for path in ("/", "/status", "/settings", "/templates", "/logs"):
             resp = await self.client.get(path, headers=AUTH)
             body = await resp.text()
             self.assertEqual(resp.status, 200, path)
@@ -61,7 +61,7 @@ class WebTests(AioHTTPTestCase):
                 self.assertNotIn("supergeheim", body, path)
             self.assertIn("default-src 'none'", resp.headers["Content-Security-Policy"])
             self.assertEqual(resp.headers["Cache-Control"], "no-store")
-        status = await (await self.client.get("/", headers=AUTH)).text()
+        status = await (await self.client.get("/status", headers=AUTH)).text()
         self.assertIn("verbonden", status)
         self.assertIn("iets misgegaan", status)
         self.assertIn("ingesteld", status)
@@ -80,6 +80,67 @@ class WebTests(AioHTTPTestCase):
         self.assertEqual(resp.status, 303)
         self.assertEqual(self.settings.url, "wss://nieuw.test/club2/")
         self.assertTrue(self.settings.connection_changed.is_set())
+
+    async def test_home_page_shows_only_messages_with_a_status_led(self):
+        self.state.set("verbonden", "ok")
+        self.state.add_message("bericht")
+        body = await (await self.client.get("/", headers=AUTH)).text()
+        self.assertIn('class="led ok"', body)
+        self.assertIn('href="/status"', body)  # lampje leidt naar de statuspagina
+        self.assertIn("<details class=\"intro\"><summary>", body)  # uitleg ingeklapt
+        self.assertNotIn('id="live-table"', body)  # geen statustabel op de startpagina
+        self.assertIn('id="live-messages"', body)
+        data = await (await self.client.get("/logs/data", headers=AUTH)).json()
+        self.assertEqual(data["led"], {"level": "ok", "status": "verbonden"})
+
+    async def test_status_page_has_the_table_but_no_messages(self):
+        body = await (await self.client.get("/status", headers=AUTH)).text()
+        self.assertIn('id="live-table"', body)
+        self.assertNotIn('id="live-messages"', body)
+
+    async def test_raw_messages_are_shown_as_readable_json_with_a_summary(self):
+        import json as _json
+        message = {
+            "scoreboard_data": {
+                "startedAt": "x", "endedAt": None, "rest": False, "time": 74, "period": 1,
+                "teams": {"home": 1, "away": 2}, "scoreboard": {"home": 2, "away": 1},
+            },
+            "teams": [{"id": 1, "scoreboard_name": "Home <FC>"}, {"id": 2, "scoreboard_name": "Away FC"}],
+            "sponsors": ["groot"] * 50,
+        }
+        self.raw_log.write_text(
+            "2026-11-20 21:47:12,123 " + _json.dumps(message) + "\n"
+            + "2026-11-20 21:47:13,000 {kapot\n",
+            encoding="utf-8",
+        )
+        body = await (await self.client.get("/logs", headers=AUTH)).text()
+        self.assertIn("Home &lt;FC&gt; 2-1 Away FC · 2e helft 1:14", body)
+        self.assertIn('&quot;period&quot;: 1,\n  &quot;rest&quot;', body)  # ingesprongen, gesorteerd
+        self.assertIn("Weggelaten (staat in het logbestand): sponsors, teams.", body)
+        self.assertNotIn("groot", body)  # grote velden niet op de pagina
+        self.assertIn("geen geldige JSON", body)
+        self.assertNotIn("<FC>", body)
+
+    async def test_goal_wait_can_be_changed_on_the_connection_page(self):
+        page = await (await self.client.get("/settings", headers=AUTH)).text()
+        self.assertIn('name="goal_wait"', page)
+        self.assertIn('value="20"', page)
+        resp = await self.client.post(
+            "/settings", data=self.post_data(action="goal_wait", goal_wait="35"), headers=AUTH
+        )
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(self.settings.goal_wait_seconds, 35)
+        self.assertIn("Wachttijd opgeslagen", await resp.text())
+        self.assertFalse(self.settings.connection_changed.is_set())
+
+        bad = await self.client.post(
+            "/settings", data=self.post_data(action="goal_wait", goal_wait="999"), headers=AUTH
+        )
+        body = await bad.text()
+        self.assertEqual(bad.status, 400)
+        self.assertIn("0 tot 300", body)
+        self.assertIn('value="999"', body)  # ingevulde waarde blijft staan
+        self.assertEqual(self.settings.goal_wait_seconds, 35)
 
     async def test_invalid_url_is_refused_with_message(self):
         resp = await self.client.post(
@@ -212,7 +273,7 @@ class WebTests(AioHTTPTestCase):
         self.assertIn("connect-src 'self'", csp)
         self.assertNotIn("http-equiv", body)  # geen volledige herlaadslag meer nodig
 
-    async def test_every_message_gets_a_ready_to_post_link_for_x(self):
+    async def test_every_message_gets_a_share_button_with_x_as_fallback(self):
         from urllib.parse import parse_qs, urlsplit
 
         text = "'12 DOELPUNT VSCO'61! Naam & Co! VSCO'61 - VSW 1 1-0. #vscvsw"
@@ -226,9 +287,10 @@ class WebTests(AioHTTPTestCase):
         self.assertEqual(parse_qs(parts.query), {"text": [text]})  # de tekst komt ongewijzigd door
         self.assertNotIn("&Co", url)  # & en # zijn gecodeerd, dus geen extra queryparameters
         self.assertNotIn("#vsc", url)
-        self.assertIn('class="tweet"', body)
-        self.assertIn('rel="noopener noreferrer"', body)
-        self.assertIn("/intent/post?text=", body)
+        self.assertIn('class="share"', body)  # altijd een Delen-knop, ook zonder foto
+        self.assertNotIn("Plaats op X", body)
+        self.assertNotIn('class="with-photo"', body)  # geen foto, dus geen vinkje
+        self.assertIn('data-fallback="https://x.com/intent/post?text=', body)  # zonder deelmenu
         self.assertEqual(data["messages"][0]["length"], len(text))
 
     async def test_message_longer_than_280_characters_is_flagged(self):
@@ -278,12 +340,23 @@ class PhotoTests(AioHTTPTestCase):
         self.state.add_message("'30 Doelpunt VSW 1. ...")
         resp = await self.client.get("/", headers=AUTH)
         body = await resp.text()
-        self.assertEqual(body.count('class="share"'), 1)  # alleen bij het bericht met foto
+        self.assertEqual(body.count('class="share"'), 2)  # bij elk bericht
+        self.assertEqual(body.count('class="with-photo" checked'), 1)  # vinkje alleen bij de foto, standaard aan
+        self.assertEqual(body.count('msg-item has-photo'), 1)
         self.assertIn(f'src="{self.photo_path(self.PHOTO)}"', body)
         self.assertIn('data-text="&#x27;12 DOELPUNT VSCO&#x27;61! Speler A! ..."', body)
         self.assertNotIn(self.PHOTO, body)  # de browser ziet alleen ons eigen adres
         self.assertIn("img-src 'self'", resp.headers["Content-Security-Policy"])
         self.assertIn("navigator.share", body)
+        self.assertIn('width="72" height="72"', body)  # vaste maat: de rij verspringt niet bij het laden
+
+    async def test_message_keys_are_stable_between_updates(self):
+        self.state.add_message("doelpunt", self.PHOTO)
+        first = (await (await self.client.get("/logs/data", headers=AUTH)).json())["messages"][0]["key"]
+        self.state.add_message("nog een")
+        data = (await (await self.client.get("/logs/data", headers=AUTH)).json())["messages"]
+        self.assertEqual(data[1]["key"], first)  # het vinkje blijft bij hetzelfde bericht
+        self.assertNotEqual(data[0]["key"], first)
 
     async def test_known_photo_is_passed_through_and_cached(self):
         self.state.add_message("doelpunt", self.PHOTO)
@@ -506,6 +579,18 @@ class InstallableAppTests(AioHTTPTestCase):
             resp = await self.client.get(path)
             self.assertIn(resp.status, (401, 403, 404), path)
             self.assertNotIn("def create_web_app", await resp.text(), path)
+
+
+class StaticTextTests(unittest.TestCase):
+    def test_css_and_scripts_contain_no_control_characters(self):
+        # Regressie: een CSS-escape als backslash-25B8 in een gewone Python-string werd een
+        # stuurteken (octale escape), waardoor het pijltje van de uitklapper kapot was.
+        import web
+
+        for name in ("CSS", "LIVE_JS", "REVEAL_JS", "SW_REGISTER_JS", "SERVICE_WORKER_JS"):
+            text = getattr(web, name)
+            bad = [hex(ord(c)) for c in text if ord(c) < 32 and c not in "\n\t"]
+            self.assertEqual(bad, [], name)
 
 
 class HelperTests(AioHTTPTestCase):
