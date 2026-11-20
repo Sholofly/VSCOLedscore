@@ -77,6 +77,8 @@ Elk bericht is de volledige status (~175 KB JSON). Relevant in `scoreboard_data`
 - `AFGELOPEN!` in hoofdletters alleen bij winst; blessuretijd = minuten boven
   `REGULAR_MINUTES`.
 - Een leeg sjabloon betekent: dat bericht niet versturen.
+- Gedeelde tekst (Delen en de X-link) eindigt met een enter (`share_text`), zodat X
+  na een hashtag aan het eind niet het hashtag-venster opent. Het bericht zelf niet.
 
 ## Beveiliging (niet afzwakken zonder overleg)
 

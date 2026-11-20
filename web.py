@@ -656,7 +656,8 @@ def messages_html(messages: list[dict]) -> str:
             photo_attr = f' data-photo="{esc(photo)}"'
         items.append(
             f'<li class="msg-item{" has-photo" if photo else ""}" data-key="{esc(item["key"])}" '
-            f'data-text="{esc(item["text"])}" data-fallback="{esc(item["url"])}"{photo_attr}>'
+            f'data-text="{esc(item["share"]).replace(chr(10), "&#10;")}" '
+            f'data-fallback="{esc(item["url"])}"{photo_attr}>'
             f"{thumb}"
             f'<div class="msg-body"><div class="msg-meta"><span>{esc(item["time"])}</span>{counter}</div>'
             f'<p class="msg-text">{esc(item["text"])}</p></div>'
@@ -666,12 +667,20 @@ def messages_html(messages: list[dict]) -> str:
     return f'<ul class="msgs">{"".join(items)}</ul>'
 
 
+def share_text(text: str) -> str:
+    """Tekst om te delen: eindigt met een enter, zodat X na een hashtag aan het eind
+    niet meteen het hashtag-venster opent."""
+    return text.rstrip("\n") + "\n"
+
+
 def message_item(message: MatchMessage) -> dict:
+    shared = share_text(message.text)
     return {
         "time": message.moment.astimezone().strftime("%H:%M:%S"),
         "text": message.text,
-        "url": post_url(message.text),
-        "length": len(message.text),
+        "share": shared,
+        "url": post_url(shared),
+        "length": len(shared),
         "photo": f"/photo/{photo_id(message.image)}" if message.image else None,
         # Vaste sleutel per bericht: foto-vinkje blijft staan, en de link in een pushmelding.
         "key": message.key,

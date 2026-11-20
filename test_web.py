@@ -288,17 +288,20 @@ class WebTests(AioHTTPTestCase):
         url = data["messages"][0]["url"]
         parts = urlsplit(url)
         self.assertEqual((parts.scheme, parts.netloc, parts.path), ("https", "x.com", "/intent/post"))
-        self.assertEqual(parse_qs(parts.query), {"text": [text]})  # de tekst komt ongewijzigd door
+        # De tekst komt ongewijzigd door, met een enter aan het eind (geen hashtag-venster in X).
+        self.assertEqual(parse_qs(parts.query), {"text": [text + "\n"]})
         self.assertNotIn("&Co", url)  # & en # zijn gecodeerd, dus geen extra queryparameters
         self.assertNotIn("#vsc", url)
         self.assertIn('class="share"', body)  # altijd een Delen-knop, ook zonder foto
         self.assertNotIn("Plaats op X", body)
         self.assertNotIn('class="with-photo"', body)  # geen foto, dus geen vinkje
         self.assertIn('data-fallback="https://x.com/intent/post?text=', body)  # zonder deelmenu
-        self.assertEqual(data["messages"][0]["length"], len(text))
+        self.assertEqual(data["messages"][0]["length"], len(text) + 1)  # X telt de enter mee
+        self.assertEqual(data["messages"][0]["text"], text)  # het bericht zelf blijft zonder enter
+        self.assertIn(' #vscvsw&#10;"', body)  # Delen: gedeelde tekst eindigt met een enter
 
     async def test_message_longer_than_280_characters_is_flagged(self):
-        self.state.add_message("x" * 281)
+        self.state.add_message("x" * 280)  # plus de enter: 281
         body = await (await self.client.get("/", headers=AUTH)).text()
         self.assertIn("281/280 - te lang voor X", body)
 
@@ -348,7 +351,7 @@ class PhotoTests(AioHTTPTestCase):
         self.assertEqual(body.count('class="with-photo" checked'), 1)  # vinkje alleen bij de foto, standaard aan
         self.assertEqual(body.count('msg-item has-photo'), 1)
         self.assertIn(f'src="{self.photo_path(self.PHOTO)}"', body)
-        self.assertIn('data-text="&#x27;12 DOELPUNT VSCO&#x27;61! Speler A! ..."', body)
+        self.assertIn('data-text="&#x27;12 DOELPUNT VSCO&#x27;61! Speler A! ...&#10;"', body)
         self.assertNotIn(self.PHOTO, body)  # de browser ziet alleen ons eigen adres
         self.assertIn("img-src 'self'", resp.headers["Content-Security-Policy"])
         self.assertIn("navigator.share", body)
@@ -696,6 +699,16 @@ class StaticTextTests(unittest.TestCase):
             text = getattr(web, name)
             bad = [hex(ord(c)) for c in text if ord(c) < 32 and c not in "\n\t"]
             self.assertEqual(bad, [], name)
+
+
+class ShareTextTests(unittest.TestCase):
+    def test_shared_text_always_ends_with_exactly_one_enter(self):
+        from web import share_text
+
+        for text in ("bericht #vscvsw", "bericht #vscvsw\n", "bericht\n\n"):
+            shared = share_text(text)
+            self.assertTrue(shared.endswith("\n"), repr(text))
+            self.assertFalse(shared.endswith("\n\n"), repr(text))
 
 
 class HelperTests(AioHTTPTestCase):

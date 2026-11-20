@@ -140,6 +140,8 @@ per pagina toegestaan en alle uitvoer wordt ge-escaped.
   - **Delen:** bij elk bericht. Opent het deelmenu van je telefoon; kies daar X.
     Zonder deelmenu (op een pc, of zonder HTTPS) opent X met de tekst al
     ingevuld. De app heeft geen toegang tot je X-account nodig.
+    De gedeelde tekst eindigt met een enter, zodat X na de hashtag niet
+    meteen het hashtag-venster opent.
   - **Foto meesturen:** bij een eigen doelpunt met doelpuntmaker staat een
     preview van de foto (`goalImage`, anders `image`) en dit vinkje, standaard
     aan. Uitgezet wordt de preview grijs en deel je alleen de tekst. Delen met
