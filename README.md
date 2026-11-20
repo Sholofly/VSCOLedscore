@@ -130,6 +130,10 @@ uitvoer wordt ge-escaped.
   `app.log` (nieuwste bovenaan) en bij het laden de laatste 10 ruwe berichten,
   ingekort. Kan het logbestand niet worden geschreven, dan toont de pagina de
   regels sinds de laatste start.
+- **Plaats op X:** bij elk wedstrijdbericht op de pagina Logging staat een knop
+  die X (app of website) opent met het bericht al ingevuld. Je plaatst het daar
+  zelf; de app heeft geen toegang tot je X-account nodig. Berichten boven 280
+  tekens worden gemarkeerd.
 
 ## Berichten en sjablonen
 

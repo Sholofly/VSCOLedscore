@@ -188,7 +188,9 @@ class WebTests(AioHTTPTestCase):
         resp = await self.client.get("/logs/data", headers=AUTH)
         data = await resp.json()
         self.assertEqual(resp.status, 200)
-        self.assertIn("'12 DOELPUNT <VSCO>! Naam!", data["messages"])  # JSON, de pagina zet het als tekst neer
+        self.assertEqual(data["messages"][0]["text"], "'12 DOELPUNT <VSCO>! Naam!")
+        self.assertIn("&lt;VSCO&gt;", data["messages_html"])  # de HTML-versie is ge-escaped
+        self.assertNotIn("<VSCO>", data["messages_html"])
         self.assertTrue(data["app"].startswith("2026 INFO tweede"))  # nieuwste bovenaan
         self.assertNotIn("supergeheim", str(data))
 
@@ -201,6 +203,35 @@ class WebTests(AioHTTPTestCase):
         csp = resp.headers["Content-Security-Policy"]
         self.assertIn("connect-src 'self'", csp)
         self.assertNotIn("http-equiv", body)  # geen volledige herlaadslag meer nodig
+
+    async def test_every_message_gets_a_ready_to_post_link_for_x(self):
+        from urllib.parse import parse_qs, urlsplit
+
+        text = "'12 DOELPUNT VSCO'61! Naam & Co! VSCO'61 - VSW 1 1-0. #vscvsw"
+        self.state.add_message(text)
+        body = await (await self.client.get("/logs", headers=AUTH)).text()
+        data = await (await self.client.get("/logs/data", headers=AUTH)).json()
+
+        url = data["messages"][0]["url"]
+        parts = urlsplit(url)
+        self.assertEqual((parts.scheme, parts.netloc, parts.path), ("https", "x.com", "/intent/post"))
+        self.assertEqual(parse_qs(parts.query), {"text": [text]})  # de tekst komt ongewijzigd door
+        self.assertNotIn("&Co", url)  # & en # zijn gecodeerd, dus geen extra queryparameters
+        self.assertNotIn("#vsc", url)
+        self.assertIn('class="tweet"', body)
+        self.assertIn('rel="noopener noreferrer"', body)
+        self.assertIn("/intent/post?text=", body)
+        self.assertEqual(data["messages"][0]["length"], len(text))
+
+    async def test_message_longer_than_280_characters_is_flagged(self):
+        self.state.add_message("x" * 281)
+        body = await (await self.client.get("/logs", headers=AUTH)).text()
+        self.assertIn("281/280 - te lang voor X", body)
+
+    async def test_no_messages_shows_a_hint_and_no_link(self):
+        body = await (await self.client.get("/logs", headers=AUTH)).text()
+        self.assertIn("nog geen wedstrijdberichten", body)
+        self.assertNotIn('class="tweet"', body)
 
     async def test_missing_log_files_do_not_break_the_page(self):
         resp = await self.client.get("/logs", headers=AUTH)

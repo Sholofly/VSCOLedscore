@@ -13,7 +13,7 @@ import logging
 import secrets
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 from aiohttp import BasicAuth, web
 
@@ -30,6 +30,8 @@ from state import ConnectionState, MemoryLogHandler
 
 logger = logging.getLogger(__name__)
 
+POST_URL = "https://x.com/intent/post?text="
+TWEET_LIMIT = 280
 APP_LOG_LINES = 300
 RAW_LOG_ENTRIES = 10
 RAW_ENTRY_CHARS = 1500
@@ -71,6 +73,10 @@ pre,code{background:var(--code);border-radius:4px;font:13px/1.45 ui-monospace,mo
 pre{padding:10px;overflow:auto;white-space:pre-wrap;word-break:break-word;margin:0}code{padding:1px 5px}
 .preview{margin:4px 0 0;color:var(--muted)}.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
 .fielderr{color:var(--err);margin-top:4px}
+.tweets{list-style:none;margin:0;padding:0}.tweets li{padding:8px 0;border-bottom:1px solid var(--line)}
+.tweets li:last-child{border:0}.msg-text{word-break:break-word}
+a.tweet{display:inline-block;margin:0 6px;padding:2px 10px;border:1px solid var(--accent);border-radius:99px;
+color:var(--accent);text-decoration:none;white-space:nowrap}a.tweet:hover{background:var(--accent);color:var(--card)}
 .pw{position:relative}.pw input{padding-right:48px}
 .reveal{position:absolute;right:4px;top:50%;transform:translateY(-50%);background:transparent;
 border:0;color:var(--muted);padding:8px;line-height:0;border-radius:6px}
@@ -89,7 +95,7 @@ LIVE_JS = (
     "(function(){var m=document.getElementById('live-messages'),l=document.getElementById('live-log'),"
     "n=document.getElementById('live-note'),s=document.getElementById('live-status');"
     "function tick(){fetch('/logs/data',{cache:'no-store'}).then(function(r){if(!r.ok)throw 0;return r.json();})"
-    ".then(function(d){m.textContent=d.messages;l.textContent=d.app;n.textContent=d.note;"
+    ".then(function(d){m.innerHTML=d.messages_html;l.textContent=d.app;n.textContent=d.note;"
     "s.textContent='Live, bijgewerkt '+new Date().toLocaleTimeString();s.className='pill ok';})"
     ".catch(function(){s.textContent='Verbinding met de pagina verloren';s.className='pill error';});}"
     "tick();setInterval(tick,2000);})();"
@@ -317,7 +323,31 @@ async def templates_reset(request: web.Request) -> web.Response:
     raise web.HTTPSeeOther("/templates?msg=reset")
 
 
-def live_logs(app: web.Application) -> dict[str, str]:
+def post_url(text: str) -> str:
+    """Link die X opent met de tekst al ingevuld; plaatsen doe je zelf (geen inlog hier)."""
+    return POST_URL + quote(text, safe="")
+
+
+def messages_html(messages: list[dict]) -> str:
+    if not messages:
+        return '<p class="muted">(nog geen wedstrijdberichten)</p>'
+    items = []
+    for item in messages:
+        too_long = item["length"] > TWEET_LIMIT
+        counter = (
+            f'<span class="small {"fielderr" if too_long else "muted"}">'
+            f'{item["length"]}/{TWEET_LIMIT}{" - te lang voor X" if too_long else ""}</span>'
+        )
+        items.append(
+            f'<li><span class="muted">{esc(item["time"])}</span> '
+            f'<span class="msg-text">{esc(item["text"])}</span> '
+            f'<a class="tweet" href="{esc(item["url"])}" target="_blank" rel="noopener noreferrer">'
+            f"Plaats op X</a> {counter}</li>"
+        )
+    return f'<ul class="tweets">{"".join(items)}</ul>'
+
+
+def live_logs(app: web.Application) -> dict:
     """De teksten voor de pagina Logging; ook gebruikt voor de live-updates."""
     app_lines = tail_lines(app["app_log"], APP_LOG_LINES)
     note = "Nieuwste bovenaan."
@@ -329,11 +359,17 @@ def live_logs(app: web.Application) -> dict[str, str]:
             "sinds de laatste start. " + note
         )
     messages = [
-        f"{moment.astimezone().strftime('%H:%M:%S')}  {text}"
+        {
+            "time": moment.astimezone().strftime("%H:%M:%S"),
+            "text": text,
+            "url": post_url(text),
+            "length": len(text),
+        }
         for moment, text in reversed(app["state"].messages)
     ]
     return {
-        "messages": "\n".join(messages) or "(nog geen wedstrijdberichten)",
+        "messages": messages,
+        "messages_html": messages_html(messages),
         "app": "\n".join(reversed(app_lines)) or "(nog geen logregels)",
         "note": note,
     }
@@ -357,8 +393,9 @@ async def logs_page(request: web.Request) -> web.Response:
         '<p><span id="live-status" class="pill warn">Live-weergave starten...</span> '
         '<span class="muted small">Werkt vanzelf bij; zonder JavaScript herlaad je de pagina zelf.</span></p>'
         '<div class="card"><h2>Wedstrijdberichten</h2>'
-        '<p class="muted small">De berichten die de app heeft gemaakt, sinds de laatste start. Nieuwste bovenaan.</p>'
-        f'<pre id="live-messages">{esc(live["messages"])}</pre></div>'
+        '<p class="muted small">De berichten die de app heeft gemaakt, sinds de laatste start. Nieuwste bovenaan. '
+        '"Plaats op X" opent X met het bericht al ingevuld; je plaatst het daar zelf.</p>'
+        f'<div id="live-messages">{live["messages_html"]}</div></div>'
         '<div class="card"><h2>Berichten en fouten</h2>'
         f'<p id="live-note" class="muted small">{esc(live["note"])}</p>'
         f'<pre id="live-log">{esc(live["app"])}</pre></div>'
