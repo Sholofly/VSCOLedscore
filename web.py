@@ -25,10 +25,12 @@ from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 from aiohttp import BasicAuth, ClientSession, ClientTimeout, web
 
 from messages import (
+    MAX_HASHTAG_LENGTH,
     MAX_TEMPLATE_LENGTH,
     PLACEHOLDERS,
     SAMPLE_CONTEXT,
     TEMPLATE_INFO,
+    default_hashtag,
     render_message,
     validate_template,
 )
@@ -68,6 +70,8 @@ MESSAGES = {
     "club_name": "Clubnaam opgeslagen.",
     "poll": "Interval opgeslagen.",
     "tikkie_url": "Adres van tikkieterug opgeslagen.",
+    "hashtag": "Hashtag opgeslagen. Hij geldt voor de wedstrijd die nu bezig is, anders voor de eerstvolgende.",
+    "hashtag_reset": "Hashtag hersteld naar de standaard.",
 }
 
 CSS = """
@@ -509,6 +513,45 @@ def goal_wait_html(request: web.Request, wait_error: str = "", wait_value: str |
     )
 
 
+def hashtag_html(request: web.Request, hashtag_error: str = "", hashtag_value: str | None = None) -> str:
+    """Blok Hashtag: de standaard uitleggen en een eigen hashtag voor één wedstrijd instellen."""
+    settings: Settings = request.app["settings"]
+    tikkie = request.app.get("tikkie")
+    match = getattr(tikkie, "match", None) if tikkie is not None else None
+    known = ""
+    if isinstance(match, dict) and match.get("homeClub") and match.get("awayClub"):
+        home, away = str(match["homeClub"]), str(match["awayClub"])
+        known = (
+            f'<p class="muted small">Wedstrijd van vandaag via tikkieterug: {esc(home)} - {esc(away)}. '
+            f"Standaard: <code>{esc(default_hashtag(home, away))}</code></p>"
+        )
+    current = (
+        f"Nu ingesteld voor de volgende wedstrijd: <code>{esc(settings.hashtag_override)}</code>."
+        if settings.hashtag_override
+        else "Nu is de standaard actief."
+    )
+    value = hashtag_value if hashtag_value is not None else settings.hashtag_override
+    return (
+        '<p class="muted small">De hashtag onder elk bericht ({hashtag}) is standaard de eerste drie letters '
+        "van de thuisploeg plus de eerste drie letters van de uitploeg, bijvoorbeeld "
+        "<code>#vscvsw</code>. Wil je voor één wedstrijd een andere, vul die dan hier in. Hij geldt voor de "
+        "wedstrijd die nu bezig is, anders voor de eerstvolgende, en vervalt na het einde ervan.</p>"
+        f"{known}"
+        f'<p class="small">{current}</p>'
+        '<form method="post" action="/settings">'
+        f'{csrf_field(request)}<input type="hidden" name="action" value="hashtag">'
+        '<label for="hashtag_input">Hashtag voor deze wedstrijd (met of zonder #)</label>'
+        f'<input type="text" id="hashtag_input" name="hashtag" maxlength="{MAX_HASHTAG_LENGTH + 1}" '
+        'autocapitalize="none" autocorrect="off" spellcheck="false" autocomplete="off" '
+        f'placeholder="#vscvsw" value="{esc(value)}">'
+        f'{message_box(hashtag_error, "error")}'
+        '<div class="row"><button type="submit">Hashtag opslaan</button></div></form>'
+        '<form method="post" action="/settings" class="row">'
+        f'{csrf_field(request)}<input type="hidden" name="action" value="hashtag_reset">'
+        '<button type="submit" class="secondary">Standaard gebruiken</button></form>'
+    )
+
+
 def tikkie_html(
     request: web.Request,
     error: str = "",
@@ -614,6 +657,7 @@ BLOCK_FOR_MESSAGE = {
     "url": "verbinding", "token": "verbinding", "goal_wait": "doelpunten",
     "source": "uitwedstrijden", "team": "uitwedstrijden", "club_name": "uitwedstrijden",
     "poll": "uitwedstrijden", "tikkie_url": "uitwedstrijden",
+    "hashtag": "hashtag", "hashtag_reset": "hashtag",
     "templates": "sjablonen", "reset": "sjablonen",
 }
 OPEN_HASH_JS = (
@@ -631,6 +675,7 @@ def app_page(
     templates: tuple[dict, dict] | None = None,
     status: int = 200,
     tikkie: dict | None = None,
+    hashtag: dict | None = None,
 ) -> web.Response:
     """App-instellingen (alleen beheerder): uitklapbare blokken, elk met een eigen opslaanknop."""
     settings: Settings = request.app["settings"]
@@ -651,6 +696,7 @@ def app_page(
         + block("verbinding", "Verbinding", connection_html(request, **(connection or {})))
         + block("uitwedstrijden", "Uitwedstrijden", tikkie_html(request, **(tikkie or {})))
         + block("doelpunten", "Doelpunten", goal_wait_html(request, **(goal_wait or {})))
+        + block("hashtag", "Hashtag", hashtag_html(request, **(hashtag or {})))
         + block("sjablonen", "Sjablonen", templates_form(request, values, errors))
         + block("logging", "Logging", logging_html(request))
     )
@@ -701,6 +747,12 @@ async def settings_post(request: web.Request) -> web.Response:
         elif action == "tikkie_url":
             settings.set_tikkie_url(str(form.get("tikkie_url", "")))
             logger.info("Adres van tikkieterug gewijzigd via de webomgeving")
+        elif action == "hashtag":
+            settings.set_hashtag(form.get("hashtag", ""))
+            logger.info("Hashtag voor de wedstrijd gewijzigd naar %s", settings.hashtag_override or "(standaard)")
+        elif action == "hashtag_reset":
+            settings.clear_hashtag()
+            logger.info("Hashtag hersteld naar de standaard")
         else:
             raise ValueError("Onbekende actie.")
     except ValueError as error:
@@ -712,6 +764,9 @@ async def settings_post(request: web.Request) -> web.Response:
         if action == "goal_wait":
             wait = {"wait_error": str(error), "wait_value": str(form.get("goal_wait", ""))}
             return app_page(request, "doelpunten", goal_wait=wait, status=400)
+        if action == "hashtag":
+            failed = {"hashtag_error": str(error), "hashtag_value": str(form.get("hashtag", ""))}
+            return app_page(request, "hashtag", hashtag=failed, status=400)
         url = {"url_error": str(error), "url_value": str(form.get("url", ""))}
         return app_page(request, "verbinding", connection=url, status=400)
     raise web.HTTPSeeOther(f"/app?msg={action}#{BLOCK_FOR_MESSAGE[action]}")

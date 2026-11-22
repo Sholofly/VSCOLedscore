@@ -146,6 +146,46 @@ class WebTests(AioHTTPTestCase):
         self.assertIn('value="999"', body)  # ingevulde waarde blijft staan
         self.assertEqual(self.settings.goal_wait_seconds, 35)
 
+    async def test_hashtag_block_explains_the_default_and_saves_an_own_hashtag(self):
+        page = await (await self.client.get("/app", headers=AUTH)).text()
+        self.assertIn('id="hashtag"', page)
+        self.assertIn('name="hashtag"', page)
+        self.assertIn("#vscvsw", page)  # het voorbeeld van de standaard
+        self.assertIn("Nu is de standaard actief", page)
+        resp = await self.client.post(
+            "/settings", data=self.post_data(action="hashtag", hashtag=" derby "), headers=AUTH
+        )
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(self.settings.hashtag_override, "#derby")  # met # bewaard
+        body = await resp.text()
+        self.assertIn("Hashtag opgeslagen", body)
+        self.assertIn("#derby", body)
+        self.assertFalse(self.settings.connection_changed.is_set())  # de verbinding blijft
+
+    async def test_a_hashtag_with_spaces_is_refused_and_the_input_is_kept(self):
+        resp = await self.client.post(
+            "/settings", data=self.post_data(action="hashtag", hashtag="twee woorden"), headers=AUTH
+        )
+        self.assertEqual(resp.status, 400)
+        body = await resp.text()
+        self.assertIn("zonder spaties", body)
+        self.assertIn('value="twee woorden"', body)
+        self.assertEqual(self.settings.hashtag_override, "")
+
+    async def test_the_default_can_be_restored(self):
+        self.settings.set_hashtag("derby")
+        resp = await self.client.post(
+            "/settings", data=self.post_data(action="hashtag_reset"), headers=AUTH
+        )
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(self.settings.hashtag_override, "")
+        self.assertIn("hersteld naar de standaard", await resp.text())
+
+    async def test_the_hashtag_is_escaped_in_the_page(self):
+        self.settings.hashtag_override = "<b>x</b>"  # bv. uit een handmatig aangepast bestand
+        page = await (await self.client.get("/app", headers=AUTH)).text()
+        self.assertNotIn("<b>x</b>", page)
+
     async def test_invalid_url_is_refused_with_message(self):
         resp = await self.client.post(
             "/settings", data=self.post_data(action="url", url="http://nope.test"), headers=AUTH
@@ -587,6 +627,8 @@ class RoleTests(AioHTTPTestCase):
             ("/settings", {"csrf": csrf, "action": "token", "token": "JWT gekaapt"}),
             ("/settings", {"csrf": csrf, "action": "url", "url": "wss://evil.test/"}),
             ("/settings", {"csrf": csrf, "action": "goal_wait", "goal_wait": "0"}),
+            ("/settings", {"csrf": csrf, "action": "hashtag", "hashtag": "gekaapt"}),
+            ("/settings", {"csrf": csrf, "action": "hashtag_reset"}),
             ("/templates", {"csrf": csrf, "tpl_start": "gekaapt"}),
             ("/templates/reset", {"csrf": csrf}),
         )
@@ -595,6 +637,7 @@ class RoleTests(AioHTTPTestCase):
         self.assertEqual(self.settings.token, TOKEN)
         self.assertEqual(self.settings.url, "wss://example.test/club/")
         self.assertEqual(self.settings.goal_wait_seconds, 20)
+        self.assertEqual(self.settings.hashtag_override, "")
         self.assertNotEqual(self.settings.templates["start"], "gekaapt")
 
     async def test_live_data_for_a_user_has_no_logs_or_status_table(self):

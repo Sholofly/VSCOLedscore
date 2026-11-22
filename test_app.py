@@ -7,6 +7,7 @@ from pathlib import Path
 
 import app
 from settings import Settings
+from state import ConnectionState
 from app import MatchLifecycle, build_websocket_uri
 
 
@@ -36,7 +37,7 @@ END = "2026-11-19T23:10:00Z"
 
 
 def trailer(home=0, away=0):
-    return f"Home FC - Away FC {home}-{away}. #vscawa"
+    return f"Home FC - Away FC {home}-{away}. #homawa"
 
 
 class MatchLifecycleTests(unittest.TestCase):
@@ -377,3 +378,82 @@ class UnwritableLogTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HashtagTests(unittest.TestCase):
+    """De hashtag onder elk bericht: standaard thuis + uit, of een eigen hashtag voor één wedstrijd."""
+
+    @staticmethod
+    def payload(home_name, away_name, **kwargs):
+        data = MatchLifecycleTests.payload(**kwargs)
+        data["teams"] = [
+            {"id": 1, "scoreboard_name": home_name},
+            {"id": 2, "scoreboard_name": away_name},
+        ]
+        return data
+
+    def start(self, lifecycle, home="VSCO'61", away="VSW 1"):
+        lifecycle.update(self.payload(home, away))
+        return lifecycle.update(self.payload(home, away, started_at=START, seconds=3))
+
+    def test_default_is_the_first_three_letters_of_home_and_away(self):
+        (message,) = self.start(MatchLifecycle())
+        self.assertTrue(message.endswith("#vscvsw"), message)
+
+    def test_the_prefix_follows_the_home_team_and_is_not_fixed_to_vsc(self):
+        (message,) = self.start(MatchLifecycle(), home="Limmen", away="WSV 30")
+        self.assertTrue(message.endswith("#limwsv"), message)
+
+    def test_an_own_hashtag_replaces_the_default(self):
+        lifecycle = MatchLifecycle(hashtag=lambda: "#derby")
+        (message,) = self.start(lifecycle)
+        self.assertTrue(message.endswith("#derby"), message)
+
+    def test_the_own_hashtag_is_asked_for_every_message_so_a_change_counts_at_once(self):
+        current = {"value": ""}
+        lifecycle = MatchLifecycle(hashtag=lambda: current["value"])
+        (first,) = self.start(lifecycle)
+        current["value"] = "#nieuw"
+        rest = lifecycle.update(self.payload("VSCO'61", "VSW 1", started_at=START, rest=True, seconds=2700))
+        self.assertTrue(first.endswith("#vscvsw"))
+        self.assertTrue(rest[0].endswith("#nieuw"), rest)
+
+    def test_the_own_hashtag_is_cleared_when_the_match_ends_and_only_then(self):
+        cleared = []
+        lifecycle = MatchLifecycle(on_match_end=lambda: cleared.append(1))
+        self.start(lifecycle)
+        lifecycle.update(self.payload("VSCO'61", "VSW 1", started_at=START, home_score=1, seconds=600))
+        self.assertEqual(cleared, [])
+        lifecycle.update(self.payload("VSCO'61", "VSW 1", started_at=START, ended_at=END, home_score=1, seconds=5400))
+        self.assertEqual(cleared, [1])
+        # dezelfde eindstand nog eens geeft geen tweede keer
+        lifecycle.update(self.payload("VSCO'61", "VSW 1", started_at=START, ended_at=END, home_score=1, seconds=5400))
+        self.assertEqual(cleared, [1])
+
+    def test_connector_wires_the_setting_to_the_lifecycle(self):
+        with tempfile.TemporaryDirectory() as folder:
+            settings = Settings(Path(folder) / "s.json")
+            settings.set_hashtag("derby")
+            connector = app.Connector(settings, ConnectionState())
+            lifecycle = connector._lifecycle_for("wss://example.test/")
+            (message,) = self.start(lifecycle)
+            self.assertTrue(message.endswith("#derby"), message)
+            lifecycle.update(self.payload("VSCO'61", "VSW 1", started_at=START, ended_at=END, seconds=5400))
+            self.assertEqual(settings.hashtag_override, "")  # vervallen na het einde
+
+    def test_scoreboard_end_during_an_away_match_keeps_the_own_hashtag(self):
+        # Regressie: tijdens een uitduel (bron tikkieterug) speelt thuis een ander team. Het
+        # eindsignaal op het scorebord mag de hashtag van de uitwedstrijd niet wissen.
+        with tempfile.TemporaryDirectory() as folder:
+            settings = Settings(Path(folder) / "s.json")
+            settings.set_hashtag("hatvsc2026")
+            allowed = [False]  # bron is tikkieterug
+            connector = app.Connector(settings, ConnectionState(), source_allowed=lambda: allowed[0])
+            lifecycle = connector._lifecycle_for("wss://example.test/")
+            self.start(lifecycle)
+            lifecycle.update(self.payload("VSCO'61 2", "Ander team", started_at=START, ended_at=END, seconds=5400))
+            self.assertEqual(settings.hashtag_override, "#hatvsc2026")
+            allowed[0] = True  # weer een thuiswedstrijd: dan wel wissen na het einde
+            lifecycle.update(self.payload("VSCO'61", "VSW 1", started_at=START, seconds=60))
+            lifecycle.update(self.payload("VSCO'61", "VSW 1", started_at=START, ended_at=END, seconds=5400))
+            self.assertEqual(settings.hashtag_override, "")

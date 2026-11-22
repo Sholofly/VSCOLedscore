@@ -15,7 +15,8 @@ PLACEHOLDERS: dict[str, str] = {
     "stand": "Stand in de volgorde thuis-uit, bv. 2-1",
     "thuis_score": "Doelpunten thuis",
     "uit_score": "Doelpunten uit",
-    "hashtag": "#vsc plus de eerste drie letters van de tegenstander",
+    "hashtag": "Hashtag van de wedstrijd: de eerste drie letters van de thuisploeg en van de uitploeg "
+    "(bv. #vscvsw). Per wedstrijd aan te passen onder Hashtag op de pagina App",
     "speler": "Naam van de doelpuntmaker (alleen bij een eigen doelpunt)",
     "blessuretijd": "Aantal minuten blessuretijd (alleen bij het einde)",
     "afsluiting": "De afsluitregel (sjabloon 'afsluiting')",
@@ -59,6 +60,33 @@ SAMPLE_CONTEXT: dict[str, Any] = {
     "speler": "Voorbeeld Speler",
     "blessuretijd": 2,
 }
+
+MAX_HASHTAG_LENGTH = 30
+
+
+def hashtag_part(name: str) -> str:
+    """De eerste drie letters van een clubnaam, klein en zonder cijfers of leestekens
+    (VSCO'61 wordt vsc, 1e Hattem wordt hat)."""
+    return "".join(char for char in str(name) if char.isalpha())[:3].lower()
+
+
+def default_hashtag(home: str, away: str) -> str:
+    """Standaardhashtag van een wedstrijd: de eerste drie letters van de thuis- en van de
+    uitploeg (VSCO'61 - VSW 1 wordt #vscvsw)."""
+    return f"#{hashtag_part(home)}{hashtag_part(away)}"
+
+
+def validate_hashtag(value: object) -> str:
+    """Maak van een zelfgekozen hashtag `#naam`; leeg betekent: de standaard gebruiken."""
+    text = str(value).strip().lstrip("#").strip()
+    if not text:
+        return ""
+    if len(text) > MAX_HASHTAG_LENGTH or not re.fullmatch(r"\w+", text):
+        raise ValueError(
+            f"Gebruik alleen letters, cijfers en een underscore, zonder spaties (maximaal {MAX_HASHTAG_LENGTH} tekens)."
+        )
+    return f"#{text}"
+
 
 class Message(str):
     """Berichttekst met de soort (sjabloonnaam, bv. "start" of "goal_home") en eventueel

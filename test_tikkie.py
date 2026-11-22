@@ -143,15 +143,58 @@ class LifecycleTests(unittest.TestCase):
             match("ended", [g1, g2, g3]), match("ended", [g1, g2, g3]),
         )
         self.assertEqual([e for e in events], [
-            "De wedstrijd is begonnen! Hattem - VSCO 61 0-0. #vschat",
-            "'12 DOELPUNT VSCO 61! Boaz Bruijnes! Hattem - VSCO 61 0-1. #vschat",
-            "'30 Doelpunt Hattem. Hattem - VSCO 61 1-1. #vschat",
-            "Rust. Hattem - VSCO 61 1-1. #vschat",
-            "De tweede helft is begonnen! Hattem - VSCO 61 1-1. #vschat",
-            "'88 DOELPUNT VSCO 61! Speler A! Hattem - VSCO 61 1-2. #vschat",
-            "AFGELOPEN! Hattem - VSCO 61 1-2. #vschat",
+            "De wedstrijd is begonnen! Hattem - VSCO 61 0-0. #hatvsc",
+            "'12 DOELPUNT VSCO 61! Boaz Bruijnes! Hattem - VSCO 61 0-1. #hatvsc",
+            "'30 Doelpunt Hattem. Hattem - VSCO 61 1-1. #hatvsc",
+            "Rust. Hattem - VSCO 61 1-1. #hatvsc",
+            "De tweede helft is begonnen! Hattem - VSCO 61 1-1. #hatvsc",
+            "'88 DOELPUNT VSCO 61! Speler A! Hattem - VSCO 61 1-2. #hatvsc",
+            "AFGELOPEN! Hattem - VSCO 61 1-2. #hatvsc",
         ])
         self.assertEqual([e.kind for e in events][-1], "end_win")
+
+    def test_hashtag_is_home_plus_away_for_every_team_not_only_for_vsco(self):
+        # een ander team dan VSCO: de hashtag begint niet met vsc maar met het thuisteam
+        lc = TikkieLifecycle(3)
+        lc.update(match("scheduled", home_id=3, away_id=4, home="Limmen", away="WSV 30"))
+        (start,) = lc.update(match("live", home_id=3, away_id=4, home="Limmen", away="WSV 30"))
+        self.assertTrue(start.endswith("#limwsv"), start)
+        # uitwedstrijd van datzelfde team: de thuisploeg staat voorop
+        away = TikkieLifecycle(4)
+        away.update(match("scheduled", home_id=3, away_id=4, home="Limmen", away="WSV 30"))
+        (start,) = away.update(match("live", home_id=3, away_id=4, home="Limmen", away="WSV 30"))
+        self.assertTrue(start.endswith("#limwsv"), start)
+
+    def test_own_club_name_is_used_for_the_hashtag_like_in_the_message(self):
+        lc = TikkieLifecycle(OWN, own_name=lambda: "VSCO'61")
+        lc.update(match("scheduled", home_id=OWN, away_id=3, home="VSCO 61", away="ESC"))
+        (start,) = lc.update(match("live", home_id=OWN, away_id=3, home="VSCO 61", away="ESC"))
+        self.assertTrue(start.endswith("#vscesc"), start)
+
+    def test_an_own_hashtag_for_the_match_replaces_the_default_and_is_cleared_at_the_end(self):
+        cleared = []
+        lc = TikkieLifecycle(OWN, hashtag=lambda: "#derby", on_end=lambda: cleared.append(1))
+        g = goal("away", 1, 12)
+        events = []
+        for snapshot in (match("scheduled"), match("live"), match("live", [g]), match("ended", [g])):
+            events += lc.update(snapshot)
+        self.assertTrue(events)
+        self.assertTrue(all(e.endswith("#derby") for e in events), events)
+        self.assertEqual(cleared, [1])
+        lc.update(match("ended", [g]))
+        self.assertEqual(cleared, [1])  # niet nog eens
+
+    def test_the_watcher_wires_the_setting_to_the_lifecycle(self):
+        with tempfile.TemporaryDirectory() as folder:
+            settings = settings_for(folder)
+            settings.set_hashtag("derby")
+            watcher = TikkieWatcher(settings, lambda messages: None, client=object())
+            lifecycle = watcher._lifecycle_for(match())
+            lifecycle.update(match("scheduled"))
+            (start,) = lifecycle.update(match("live"))
+            self.assertTrue(start.endswith("#derby"), start)
+            lifecycle.update(match("ended"))
+            self.assertEqual(settings.hashtag_override, "")
 
     def test_first_snapshot_is_the_baseline(self):
         self.assertEqual(self.lc.update(match("live", [goal("away", 1, 10)])), [])
@@ -172,7 +215,7 @@ class LifecycleTests(unittest.TestCase):
         # Alleen de stand is bijgewerkt (nog geen doelpunt in de lijst): melding zonder minuut.
         only_score = match("live", [goal("away", 1, 20, "Onbekende Speler")], score=(1, 1))
         (opp,) = self.lc.update(only_score)
-        self.assertEqual(opp, "Doelpunt Hattem. Hattem - VSCO 61 1-1. #vschat")
+        self.assertEqual(opp, "Doelpunt Hattem. Hattem - VSCO 61 1-1. #hatvsc")
         # Later komt het doelpunt alsnog in de lijst: geen tweede melding.
         later = match("live", [goal("away", 1, 20, "Onbekende Speler"), goal("home", 1, 40)])
         self.assertEqual(self.lc.update(later), [])
@@ -188,7 +231,7 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(self.lc.update(match("live")), [])  # doelpunt weggehaald
         self.assertEqual(self.lc.update(match("live", [g])), [])  # en weer terug: niet opnieuw
         (end,) = self.lc.update(match("ended", [g]))
-        self.assertEqual((end, end.kind), ("Afgelopen! Hattem - VSCO 61 1-0. #vschat", "end_other"))
+        self.assertEqual((end, end.kind), ("Afgelopen! Hattem - VSCO 61 1-0. #hatvsc", "end_other"))
 
     def test_jump_from_scheduled_to_halftime_reports_start_and_rest(self):
         events = self.run_steps(match("scheduled"), match("halftime"))

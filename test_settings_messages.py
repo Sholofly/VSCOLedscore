@@ -9,6 +9,8 @@ from settings import Settings, token_expiry
 from app import MatchLifecycle
 
 import test_app
+import test_app
+from messages import default_hashtag, hashtag_part, validate_hashtag
 
 
 class MessageTemplateTests(unittest.TestCase):
@@ -45,7 +47,7 @@ class CustomTemplateTests(unittest.TestCase):
         templates["start"] = "Aftrap! {stand} {afsluiting}"
         templates["afsluiting"] = "{hashtag}"
         started = test_app.GoalTests.payload(started_at=test_app.START)
-        self.assertEqual(lifecycle.update(started, now=1), ["Aftrap! 0-0 #vscawa"])
+        self.assertEqual(lifecycle.update(started, now=1), ["Aftrap! 0-0 #homawa"])
 
         templates["goal_away"] = ""
         goal = test_app.GoalTests.payload(started_at=test_app.START, away_score=1)
@@ -168,3 +170,59 @@ class TokenExpiryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HashtagTests(unittest.TestCase):
+    def test_part_is_the_first_three_letters_without_digits_or_punctuation(self):
+        self.assertEqual(hashtag_part("VSCO'61"), "vsc")
+        self.assertEqual(hashtag_part("1e Hattem"), "eha")  # het cijfer valt weg, de e blijft
+        self.assertEqual(hashtag_part("VSW 1"), "vsw")
+        self.assertEqual(hashtag_part("WSV 30"), "wsv")
+        self.assertEqual(hashtag_part("Ésprit"), "ésp")  # letters met accent blijven
+        self.assertEqual(hashtag_part("De Hoogt"), "deh")
+        self.assertEqual(hashtag_part("AB"), "ab")
+        self.assertEqual(hashtag_part("123"), "")
+
+    def test_default_is_home_plus_away(self):
+        self.assertEqual(default_hashtag("VSCO'61", "VSW 1"), "#vscvsw")
+        # een ander team dan VSCO begint niet meer met vsc
+        self.assertEqual(default_hashtag("Limmen", "WSV 30"), "#limwsv")
+        # bij een uitwedstrijd staat de thuisploeg voorop
+        self.assertEqual(default_hashtag("Hattem", "VSCO 61"), "#hatvsc")
+
+    def test_validate_normalizes_and_rejects(self):
+        self.assertEqual(validate_hashtag("vscvsw"), "#vscvsw")
+        self.assertEqual(validate_hashtag("  #VSCvsw  "), "#VSCvsw")
+        self.assertEqual(validate_hashtag("##dubbel"), "#dubbel")
+        self.assertEqual(validate_hashtag(""), "")
+        self.assertEqual(validate_hashtag("#"), "")
+        self.assertEqual(validate_hashtag("derby_2026"), "#derby_2026")
+        for bad in ("met spatie", "a-b", "#a#b", "x" * 31, "<script>", "a\nb"):
+            with self.assertRaises(ValueError, msg=bad):
+                validate_hashtag(bad)
+
+
+class HashtagSettingsTests(unittest.TestCase):
+    def test_override_is_saved_reloaded_and_cleared(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "s.json"
+            settings = Settings(path)
+            self.assertEqual(settings.hashtag_override, "")
+            settings.set_hashtag("derby")
+            self.assertEqual(settings.hashtag_override, "#derby")
+            self.assertEqual(Settings(path).hashtag_override, "#derby")  # blijft na een herstart
+            settings.clear_hashtag()
+            self.assertEqual(Settings(path).hashtag_override, "")
+
+    def test_an_invalid_value_is_refused_and_a_broken_file_value_is_ignored(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "s.json"
+            settings = Settings(path)
+            settings.set_hashtag("goed")
+            with self.assertRaises(ValueError):
+                settings.set_hashtag("niet goed")
+            self.assertEqual(settings.hashtag_override, "#goed")  # ongewijzigd
+            data = json.loads(path.read_text(encoding="utf-8"))
+            data["hashtag_override"] = "kapot met spaties"
+            path.write_text(json.dumps(data), encoding="utf-8")
+            self.assertEqual(Settings(path).hashtag_override, "")

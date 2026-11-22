@@ -5,7 +5,6 @@ import logging
 import math
 import os
 import random
-import re
 import signal
 import time
 import traceback
@@ -24,7 +23,7 @@ from websockets.exceptions import (
     WebSocketException,
 )
 
-from messages import DEFAULT_TEMPLATES, Message, render_message
+from messages import DEFAULT_TEMPLATES, Message, default_hashtag, render_message
 from settings import Settings
 from state import ConnectionState, MemoryLogHandler, now as state_now
 
@@ -125,10 +124,15 @@ class MatchLifecycle:
         regular_minutes: int = 90,
         templates: Mapping[str, str] | Callable[[], Mapping[str, str]] | None = None,
         goal_wait: Callable[[], float] | None = None,
+        hashtag: Callable[[], str] | None = None,
+        on_match_end: Callable[[], None] | None = None,
     ) -> None:
         self.regular_minutes = regular_minutes
         # Per doelpunt opgevraagd, zodat een wijziging in de webapp direct geldt.
         self._goal_wait: Callable[[], float] = goal_wait or (lambda: GOAL_WAIT_SECONDS)
+        # Eigen hashtag voor deze wedstrijd (leeg = standaard); na het einde wordt die gewist.
+        self._hashtag: Callable[[], str] = hashtag or (lambda: "")
+        self._on_match_end: Callable[[], None] = on_match_end or (lambda: None)
         if templates is None:
             self._templates: Callable[[], Mapping[str, str]] = lambda: DEFAULT_TEMPLATES
         elif callable(templates):
@@ -225,6 +229,7 @@ class MatchLifecycle:
                 events.extend(self._render("second_half", context))
             if ended:
                 events.extend(self._end_messages(self._elapsed_seconds(data), score, context))
+                self._on_match_end()  # een eigen hashtag gold alleen voor deze wedstrijd
             if is_active and not started and scored_side == "away":
                 events.extend(self._render("goal_away", context))
             elif is_active and not started and scored_side == "home":
@@ -250,11 +255,9 @@ class MatchLifecycle:
         self.initialized = True
         return events
 
-    @staticmethod
     def _context(
-        home: str, away: str, score: tuple[Any, Any], minute: str
+        self, home: str, away: str, score: tuple[Any, Any], minute: str
     ) -> dict[str, Any]:
-        tag = re.sub(r"[^A-Za-z]", "", away)[:3].lower()
         home_score = "?" if score[0] is None else score[0]
         away_score = "?" if score[1] is None else score[1]
         return {
@@ -267,7 +270,7 @@ class MatchLifecycle:
             "stand": f"{home_score}-{away_score}",
             "thuis_score": home_score,
             "uit_score": away_score,
-            "hashtag": f"#vsc{tag}",
+            "hashtag": self._hashtag() or default_hashtag(home, away),
             "blessuretijd": 0,
         }
 
@@ -422,6 +425,11 @@ class Connector:
                 self.regular_minutes,
                 lambda: self.settings.templates,
                 goal_wait=lambda: self.settings.goal_wait_seconds,
+                hashtag=lambda: self.settings.hashtag_override,
+                # Alleen wissen als het scorebord nu de bron is: tijdens een uitduel kan
+                # thuis een ander team spelen, en dat eindsignaal hoort niet bij de
+                # wedstrijd waarvoor de eigen hashtag is ingesteld.
+                on_match_end=lambda: self.source_allowed() and self.settings.clear_hashtag(),
             )
             self._lifecycle_url = url
         return self._lifecycle

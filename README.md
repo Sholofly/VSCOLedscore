@@ -190,7 +190,7 @@ voetbalnederland.nl), met dezelfde sjablonen.
   kwartier voor de aftrap elke 30 seconden (instelbaar), tot hij is afgelopen.
 - Begin, rust, tweede helft en einde komen **zonder minuut** (tikkieterug kent
   die niet); doelpunten krijgen de minuut en de doelpuntmaker uit tikkieterug.
-  De afsluiting staat in de echte volgorde, bv. `Hattem - VSCO 61 0-1. #vschat`.
+  De afsluiting staat in de echte volgorde, bv. `Hattem - VSCO 61 0-1. #hatvsc`.
   Met "Clubnaam in berichten" toon je de eigen club bijvoorbeeld als `VSCO'61`.
 - De gegevens worden door vrijwilligers ingevoerd: berichten kunnen later komen
   dan op het veld, en een doelpunt zonder ingevulde speler komt zonder naam.
@@ -247,6 +247,20 @@ Aanduidingen: `{minuut}`, `{thuis}`, `{uit}`, `{tegenstander}`, `{stand}`,
 `{thuis_score}`, `{uit_score}`, `{hashtag}`, `{afsluiting}`, plus `{speler}` bij
 een eigen doelpunt en `{blessuretijd}` bij het einde. Zie de pagina Berichten
 voor de uitleg.
+
+### De hashtag
+
+`{hashtag}` is standaard de eerste drie letters van de **thuisploeg** plus de
+eerste drie letters van de **uitploeg**, zonder cijfers en leestekens:
+`VSCO'61 - VSW 1` wordt `#vscvsw`, `Limmen - WSV 30` wordt `#limwsv`. Bij een
+uitwedstrijd staat de thuisploeg voorop: `Hattem - VSCO 61` wordt `#hatvsc`. Dit
+geldt zowel voor het scorebord als voor tikkieterug.
+
+Voor één wedstrijd kun je een eigen hashtag instellen op de pagina App, blok
+**Hashtag** (met of zonder `#`; letters, cijfers en een underscore, maximaal 30
+tekens). Hij geldt direct, voor de wedstrijd die nu bezig is of anders voor de
+eerstvolgende, en vervalt zodra die wedstrijd is afgelopen: daarna geldt weer de
+standaard. Met **Standaard gebruiken** wis je hem eerder.
 
 - Blessuretijd telt per helft: na 45:00 in de eerste helft is het `'45+1`,
   na 90:00 in de tweede helft `'90+1` (op basis van `REGULAR_MINUTES`).

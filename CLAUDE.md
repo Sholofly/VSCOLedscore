@@ -96,6 +96,13 @@ Elk bericht is de volledige status (~175 KB JSON). Relevant in `scoreboard_data`
 - `AFGELOPEN!` in hoofdletters alleen bij winst; blessuretijd = minuten boven
   `REGULAR_MINUTES`.
 - Een leeg sjabloon betekent: dat bericht niet versturen.
+- `{hashtag}` = `default_hashtag(thuis, uit)` (`messages.py`): eerste drie letters van
+  thuis- en uitploeg, klein en zonder cijfers/leestekens (`#vscvsw`; uit bij Hattem
+  wordt `#hatvsc`, thuisploeg voorop). Geen vaste `vsc` meer. `Settings.hashtag_override`
+  (pagina App, blok Hashtag) geldt voor één wedstrijd en wordt door beide lifecycles
+  gewist na het einde (`on_match_end` / `on_end`); hij wordt per bericht opgevraagd.
+  Het scorebord wist hem alleen als het scorebord de bron is (`source_allowed`): tijdens
+  een uitduel kan thuis een ander team spelen.
 - Gedeelde tekst (Delen en de X-link) eindigt met een enter (`share_text`), zodat X
   na een hashtag aan het eind niet het hashtag-venster opent. Het bericht zelf niet.
 

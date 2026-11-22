@@ -14,7 +14,6 @@ gebruikt; geen sleutel nodig): `/clubs?search=`, `/clubs/{id}/programma`,
 
 import asyncio
 import logging
-import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
@@ -23,7 +22,7 @@ from urllib.parse import quote
 
 from aiohttp import ClientError, ClientSession, ClientTimeout, ContentTypeError
 
-from messages import DEFAULT_TEMPLATES, Message, render_message
+from messages import DEFAULT_TEMPLATES, Message, default_hashtag, render_message
 from settings import Settings
 from state import now as state_now
 
@@ -115,10 +114,15 @@ class TikkieLifecycle:
         team_id: int,
         templates: Callable[[], Mapping[str, str]] = lambda: DEFAULT_TEMPLATES,
         own_name: Callable[[], str] = lambda: "",
+        hashtag: Callable[[], str] = lambda: "",
+        on_end: Callable[[], None] = lambda: None,
     ) -> None:
         self.team_id = team_id
         self._templates = templates
         self._own_name = own_name
+        # Eigen hashtag voor deze wedstrijd (leeg = standaard); na het einde wordt die gewist.
+        self._hashtag = hashtag
+        self._on_end = on_end
         self.initialized = False
         self.status: str | None = None
         self.seen_goals: set[tuple[str, int]] = set()
@@ -137,7 +141,6 @@ class TikkieLifecycle:
         home, away = self._names(match)
         side = own_side(match, self.team_id)
         own, opponent = (home, away) if side == "home" else (away, home)
-        tag = re.sub(r"[^A-Za-z]", "", opponent)[:3].lower()
         return {
             "minuut": minute,
             "thuis": home,
@@ -147,7 +150,7 @@ class TikkieLifecycle:
             "stand": f"{score[0]}-{score[1]}",
             "thuis_score": score[0],
             "uit_score": score[1],
-            "hashtag": f"#vsc{tag}",
+            "hashtag": self._hashtag() or default_hashtag(home, away),
             "blessuretijd": 0,
         }
 
@@ -229,6 +232,7 @@ class TikkieLifecycle:
         if self.initialized and status == "ended" and previous != "ended":
             own, opponent = (score[0], score[1]) if side == "home" else (score[1], score[0])
             events += self._render("end_win" if own > opponent else "end_other", context)
+            self._on_end()  # een eigen hashtag gold alleen voor deze wedstrijd
 
         self.status = status
         self.initialized = True
@@ -330,6 +334,8 @@ class TikkieWatcher:
                 self.settings.team_id,
                 lambda: self.settings.templates,
                 lambda: self.settings.club_name,
+                hashtag=lambda: self.settings.hashtag_override,
+                on_end=self.settings.clear_hashtag,
             )
             self._lifecycle_match = match_id
         return self._lifecycle

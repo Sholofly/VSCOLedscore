@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import parse_qsl, urlsplit
 
-from messages import DEFAULT_TEMPLATES, TEMPLATE_INFO, validate_template
+from messages import DEFAULT_TEMPLATES, TEMPLATE_INFO, validate_hashtag, validate_template
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +127,9 @@ class Settings:
         # Wordt gezet als iets van tikkieterug verandert, zodat de watcher opnieuw kijkt.
         self.tikkie_changed = asyncio.Event()
         self.template_overrides: dict[str, str] = {}
+        # Eigen hashtag voor één wedstrijd (de lopende, anders de eerstvolgende); leeg = de
+        # standaard uit de eerste drie letters van thuis- en uitploeg. Vervalt na het einde.
+        self.hashtag_override = ""
         self.goal_wait_seconds: float = DEFAULT_GOAL_WAIT_SECONDS
         # Wordt gezet als URL of token verandert, zodat de verbinding opnieuw opbouwt.
         self.connection_changed = asyncio.Event()
@@ -157,6 +160,11 @@ class Settings:
             except ValueError:
                 logger.error("Ongeldige wachttijd in het instellingenbestand; standaard gebruikt.")
         self._load_tikkie(raw)
+        if raw.get("hashtag_override"):
+            try:
+                self.hashtag_override = validate_hashtag(raw["hashtag_override"])
+            except ValueError:
+                logger.error("Ongeldige hashtag in het instellingenbestand; standaard gebruikt.")
         templates = raw.get("templates")
         if isinstance(templates, dict):
             self.template_overrides = {
@@ -195,6 +203,7 @@ class Settings:
             "url": self.url,
             "token": self.token,
             "templates": self.template_overrides,
+            "hashtag_override": self.hashtag_override,
             "goal_wait_seconds": self.goal_wait_seconds,
             "tikkie_url": self.tikkie_url,
             "team_id": self.team_id,
@@ -274,6 +283,17 @@ class Settings:
         if seconds != self.goal_wait_seconds:
             self.goal_wait_seconds = seconds
             self._save()
+
+    def set_hashtag(self, value: object) -> None:
+        """Eigen hashtag voor één wedstrijd; leeg herstelt de standaard. Geldt direct."""
+        hashtag = validate_hashtag(value)
+        if hashtag != self.hashtag_override:
+            self.hashtag_override = hashtag
+            self._save()
+
+    def clear_hashtag(self) -> None:
+        """Terug naar de standaard (na het einde van de wedstrijd waarvoor hij gold)."""
+        self.set_hashtag("")
 
     def set_templates(self, templates: dict[str, str]) -> None:
         """Sla sjablonen op; alleen afwijkingen van de standaard worden bewaard."""
