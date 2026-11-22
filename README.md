@@ -274,13 +274,21 @@ op het scorebord is de eigen club):
 '30 Doelpunt VSW 1. VSCO'61 - VSW 1 1-1. #vscvsw
 '45 Rust. VSCO'61 - VSW 1 1-1. #vscvsw
 '46 De tweede helft is begonnen! VSCO'61 - VSW 1 1-1. #vscvsw
+'60 Wissel bij VSCO'61: Speler In vervangt Speler Uit. VSCO'61 - VSW 1 1-1. #vscvsw
 '90+2 AFGELOPEN! VSCO'61 - VSW 1 2-1. #vscvsw
 ```
 
+Wissels komen voorlopig alleen van de bron LED Scores, en alleen die van de eigen
+club. Bij een dubbele wissel staan beide namen erin ("A en B"); de foto van de
+speler die erin komt, gaat mee. Er is ook een alternatief bericht
+(`'60 Wissel bij VSCO'61: Speler Uit verlaat het veld voor Speler In. ...`); met het
+vinkje "Afwisselen" (standaard aan) kiest de app per wissel willekeurig een van de
+twee. Een leeg sjabloon doet niet mee.
+
 Aanduidingen: `{minuut}`, `{thuis}`, `{uit}`, `{tegenstander}`, `{stand}`,
 `{thuis_score}`, `{uit_score}`, `{hashtag}`, `{afsluiting}`, plus `{speler}` bij
-een eigen doelpunt en `{blessuretijd}` bij het einde. Zie de pagina Berichten
-voor de uitleg.
+een eigen doelpunt, `{erin}` en `{eruit}` bij een wissel en `{blessuretijd}` bij het
+einde. Zie de pagina Sjablonen voor de uitleg.
 
 ### De hashtag
 

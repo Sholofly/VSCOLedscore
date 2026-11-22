@@ -788,6 +788,35 @@ class InstallableAppTests(AioHTTPTestCase):
         maskable = [icon["src"] for icon in data["icons"] if icon["purpose"] == "maskable"]
         self.assertEqual(maskable, ["/static/icon-maskable-512.png"])
 
+    async def test_alternative_substitution_message_can_be_switched_off_and_on(self):
+        self.settings = self.app["settings"]
+        page = await (await self.client.get("/sjablonen", headers=AUTH)).text()
+        self.assertIn('name="tpl_substitution_alt"', page)
+        self.assertIn('<input type="checkbox" name="substitution_alt" value="1" checked>', page)  # standaard aan
+        data = {"csrf": self.app["csrf"], "tpl_start": self.settings.templates["start"],
+                "substitution_alt_shown": "1"}  # uitgevinkt: het vakje stuurt niets mee
+        resp = await self.client.post("/templates", data=data, headers=AUTH, allow_redirects=False)
+        self.assertEqual(resp.status, 303)
+        self.assertFalse(self.settings.substitution_alt)
+        self.assertFalse(Settings(self.settings.path).substitution_alt)  # bewaard
+        page = await (await self.client.get("/sjablonen", headers=AUTH)).text()
+        self.assertIn('<input type="checkbox" name="substitution_alt" value="1">', page)
+        # Een script dat alleen sjablonen stuurt, laat het vinkje met rust.
+        await self.client.post("/templates", data={"csrf": self.app["csrf"], "tpl_start": "x"}, headers=AUTH)
+        self.assertFalse(self.settings.substitution_alt)
+        await self.client.post("/templates", data={**data, "substitution_alt": "1"}, headers=AUTH)
+        self.assertTrue(self.settings.substitution_alt)
+        self.settings.substitution_alt = False
+        await self.client.post("/templates/reset", data={"csrf": self.app["csrf"]}, headers=AUTH)
+        self.assertTrue(self.settings.substitution_alt)  # standaard herstellen zet hem weer aan
+
+    async def test_templates_page_has_the_substitution_template(self):
+        page = await (await self.client.get("/sjablonen", headers=AUTH)).text()
+        self.assertIn('name="tpl_substitution"', page)
+        self.assertIn("Wissel eigen club (alleen LED Scores)", page)
+        self.assertIn("{erin}", page)
+        self.assertIn("{eruit}", page)
+
     async def test_logo_in_relief_on_the_background_for_light_and_dark(self):
         page = await (await self.client.get("/login")).text()
         self.assertIn("body::before{", page)

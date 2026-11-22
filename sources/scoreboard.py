@@ -55,8 +55,13 @@ class MatchLifecycle:
         goal_wait: Callable[[], float] | None = None,
         hashtag: Callable[[], str] | None = None,
         on_match_end: Callable[[], None] | None = None,
+        substitution_alt: Callable[[], bool] | None = None,
+        choose: Callable[[list[str]], str] = random.choice,
     ) -> None:
         self.regular_minutes = regular_minutes
+        # Bij een wissel ook het alternatieve bericht gebruiken (per wissel willekeurig gekozen).
+        self._substitution_alt: Callable[[], bool] = substitution_alt or (lambda: False)
+        self._choose = choose
         # Per doelpunt opgevraagd, zodat een wijziging in de webapp direct geldt.
         self._goal_wait: Callable[[], float] = goal_wait or (lambda: GOAL_WAIT_SECONDS)
         # Eigen hashtag voor deze wedstrijd (leeg = standaard); na het einde wordt die gewist.
@@ -78,6 +83,9 @@ class MatchLifecycle:
         self.teams: tuple[str, str] | None = None
         # Doelpuntmakers: (kant, positie, naam) -> foto-URL (of None)
         self.scorers: dict[tuple[str, int, str], str | None] = {}
+        # Id's van al verwerkte scorebordgebeurtenissen (wissels): een wissel komt als los
+        # bericht én daarna in `scoreboard_events` van de status; zo wordt hij één keer gemeld.
+        self.seen_events: set[Any] = set()
         # Eigen doelpunt dat wacht op een doelpuntmaker: (context, deadline)
         self.pending_goal: tuple[dict[str, Any], float] | None = None
 
@@ -125,6 +133,8 @@ class MatchLifecycle:
         now = time.monotonic() if now is None else now
         if not isinstance(payload, dict):
             return []
+        if payload.get("type") == "event":  # los gebeurtenisbericht, bv. een wissel
+            return self._events([payload.get("event")])
         data = payload.get("scoreboard_data")
         if not isinstance(data, dict):
             return []
@@ -178,6 +188,7 @@ class MatchLifecycle:
                         for text in self._render("goal_home", {**goal_context, "speler": name})
                     )
 
+        was_initialized = self.initialized
         self.started_at = started_at
         self.ended_at = ended_at
         self.active = is_active
@@ -185,7 +196,63 @@ class MatchLifecycle:
         self.score = score
         self.scorers = scorers
         self.initialized = True
+        listed = payload.get("scoreboard_events")
+        if isinstance(listed, list):
+            if was_initialized:
+                events.extend(self._events(listed))
+            else:  # beginsituatie: gebeurtenissen van vóór het verbinden niet melden
+                self.seen_events.update(e.get("id") for e in listed if isinstance(e, dict))
         return events
+
+    def _events(self, items: list[Any]) -> list[Message]:
+        """Wissels van de eigen (thuis)ploeg, elk één keer (op id)."""
+        messages: list[Message] = []
+        for item in items:
+            if not isinstance(item, dict) or item.get("type") != "substitute":
+                continue
+            event_id = item.get("id")
+            if event_id is None or event_id in self.seen_events:
+                continue
+            self.seen_events.add(event_id)
+            data = item.get("data")
+            if not self.initialized or not self.active or not isinstance(data, dict):
+                continue
+            if data.get("side") != "home":
+                continue
+            pairs = [p for p in data.get("players") or [] if isinstance(p, dict)]
+            players_in = [self._player(p.get("in")) for p in pairs]
+            players_out = [self._player(p.get("out")) for p in pairs]
+            names_in = [name for name, _ in players_in if name]
+            names_out = [name for name, _ in players_out if name]
+            if not names_in and not names_out:
+                continue
+            home, away = self.teams or ("Thuis", "Uit")
+            # Tijdens de rust staat `time` op 0: dan geldt het einde van de helft (45).
+            minute = self._minute_label({"time": data.get("time"), "period": data.get("period"), "rest": self.rest})
+            context = self._context(home, away, self.score or (None, None), minute)
+            context.update(erin=join_names(names_in) or "?", eruit=join_names(names_out) or "?")
+            photo = next((photo for _, photo in players_in if photo), None)
+            key = self._substitution_key()
+            if key is None:
+                continue
+            messages.extend(Message(text, photo, key) for text in self._render(key, context))
+        return messages
+
+    def _substitution_key(self) -> str | None:
+        """Welk wisselsjabloon: het standaardbericht, of (als dat aan staat) willekeurig het
+        standaard- of het alternatieve bericht. Lege sjablonen doen niet mee."""
+        templates = self._templates()
+        keys = ["substitution"] + (["substitution_alt"] if self._substitution_alt() else [])
+        keys = [key for key in keys if templates.get(key, DEFAULT_TEMPLATES[key]).strip()]
+        return self._choose(keys) if keys else None
+
+    @staticmethod
+    def _player(player: Any) -> tuple[str, str | None]:
+        """(naam, foto-URL) van een speler uit een scorebordbericht."""
+        if not isinstance(player, dict):
+            return "", None
+        name = " ".join(str(player.get("name") or "").split())
+        return name, player_photo(player)
 
     def _context(
         self, home: str, away: str, score: tuple[Any, Any], minute: str
@@ -276,13 +343,7 @@ class MatchLifecycle:
                 player = entry.get("player") if isinstance(entry, dict) else None
                 name = player.get("name") if isinstance(player, dict) else None
                 if name:
-                    photo = None
-                    for field in ("goalImage", "image"):
-                        value = player.get(field)
-                        if isinstance(value, str) and value.startswith(("https://", "http://")):
-                            photo = value
-                            break
-                    result[(side, index, str(name))] = photo
+                    result[(side, index, str(name))] = player_photo(player)
         return result
 
     @staticmethod
@@ -298,6 +359,22 @@ class MatchLifecycle:
             str(names.get(team_ids.get("home")) or "Thuis"),
             str(names.get(team_ids.get("away")) or "Uit"),
         )
+
+
+def player_photo(player: dict[str, Any]) -> str | None:
+    """Foto van een speler: `goalImage` (doelpuntfoto), anders `image` (pasfoto), alleen http(s)."""
+    for field in ("goalImage", "image"):
+        value = player.get(field)
+        if isinstance(value, str) and value.startswith(("https://", "http://")):
+            return value
+    return None
+
+
+def join_names(names: list[str]) -> str:
+    """"A", "A en B", "A, B en C"."""
+    if len(names) <= 1:
+        return "".join(names)
+    return ", ".join(names[:-1]) + " en " + names[-1]
 
 
 def build_websocket_uri(endpoint: str, token: str) -> str:
@@ -357,6 +434,7 @@ class Connector:
                 # Het scorebord draait alleen als het de gekozen bron is, dus een
                 # eindsignaal hoort bij de wedstrijd waarvoor de eigen hashtag gold.
                 on_match_end=self.settings.clear_hashtag,
+                substitution_alt=lambda: self.settings.substitution_alt,
             )
             self._lifecycle_url = url
         return self._lifecycle

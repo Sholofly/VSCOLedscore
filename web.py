@@ -1140,6 +1140,13 @@ def templates_form(request: web.Request, values: dict[str, str], errors: dict[st
             f'maxlength="{MAX_TEMPLATE_LENGTH}" autocomplete="off">{error}'
             f'<div class="preview small">Voorbeeld: {esc(preview) if preview else "(geen bericht)"}</div>'
         )
+        if key == "substitution_alt":
+            checked = " checked" if request.app["settings"].substitution_alt else ""
+            fields.append(
+                '<input type="hidden" name="substitution_alt_shown" value="1">'
+                f'<label class="choice"><input type="checkbox" name="substitution_alt" value="1"{checked}>'
+                "Afwisselen: per wissel willekeurig dit of het standaardbericht</label>"
+            )
     return (
         '<details class="intro"><summary>Aanduidingen</summary>'
         '<p class="muted small">Gebruik deze in een sjabloon, bijvoorbeeld <code>{thuis} - {uit} {stand}</code>. '
@@ -1162,7 +1169,10 @@ async def templates_post(request: web.Request) -> web.Response:
     errors = {key: error for key in TEMPLATE_INFO if (error := validate_template(key, submitted[key]))}
     if errors:
         return app_page(request, "sjablonen", templates=(submitted, errors), status=400)
-    settings.set_templates(submitted)
+    # Het vinkje alleen meenemen als het formulier het toonde (een script kan ook alleen
+    # sjablonen sturen); een uitgevinkt vakje stuurt niets mee.
+    alt = form.get("substitution_alt") == "1" if form.get("substitution_alt_shown") else None
+    settings.set_templates(submitted, substitution_alt=alt)
     logger.info("Berichtsjablonen gewijzigd via de webomgeving")
     raise web.HTTPSeeOther("/sjablonen?msg=templates#sjablonen")
 

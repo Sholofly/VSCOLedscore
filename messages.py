@@ -16,8 +16,10 @@ PLACEHOLDERS: dict[str, str] = {
     "thuis_score": "Doelpunten thuis",
     "uit_score": "Doelpunten uit",
     "hashtag": "Hashtag van de wedstrijd: de eerste drie letters van de thuisploeg en van de uitploeg "
-    "(bv. #vscvsw). Per wedstrijd aan te passen onder Hashtag op de pagina App",
+    "(bv. #vscvsw). Per wedstrijd aan te passen onder Hashtag op de pagina Sjablonen",
     "speler": "Naam van de doelpuntmaker (alleen bij een eigen doelpunt)",
+    "erin": "Naam van de speler die erin komt (alleen bij een wissel; bij meer spelers: A en B)",
+    "eruit": "Naam van de speler die eruit gaat (alleen bij een wissel; bij meer spelers: A en B)",
     "blessuretijd": "Aantal minuten blessuretijd (alleen bij het einde)",
     "afsluiting": "De afsluitregel (sjabloon 'afsluiting')",
 }
@@ -32,6 +34,8 @@ TEMPLATE_INFO: dict[str, tuple[str, set[str]]] = {
     "second_half": ("Begin tweede helft", set()),
     "end_win": ("Einde wedstrijd, winst", {"blessuretijd"}),
     "end_other": ("Einde wedstrijd, gelijkspel of verlies", {"blessuretijd"}),
+    "substitution": ("Wissel eigen club (alleen LED Scores)", {"erin", "eruit"}),
+    "substitution_alt": ("Wissel eigen club, alternatief", {"erin", "eruit"}),
     "afsluiting": ("Afsluiting onder elk bericht", set()),
 }
 
@@ -44,6 +48,8 @@ DEFAULT_TEMPLATES: dict[str, str] = {
     "second_half": "'{minuut} De tweede helft is begonnen! {afsluiting}",
     "end_win": "'{minuut} AFGELOPEN! {afsluiting}",
     "end_other": "'{minuut} Afgelopen! {afsluiting}",
+    "substitution": "'{minuut} Wissel bij {eigen}: {erin} vervangt {eruit}. {afsluiting}",
+    "substitution_alt": "'{minuut} Wissel bij {eigen}: {eruit} verlaat het veld voor {erin}. {afsluiting}",
     "afsluiting": "{thuis} - {uit} {stand}. {hashtag}",
 }
 
@@ -58,6 +64,8 @@ SAMPLE_CONTEXT: dict[str, Any] = {
     "uit_score": 1,
     "hashtag": "#vscvsw",
     "speler": "Voorbeeld Speler",
+    "erin": "Speler In",
+    "eruit": "Speler Uit",
     "blessuretijd": 2,
 }
 
@@ -106,7 +114,7 @@ MAX_TEMPLATE_LENGTH = 500
 _PLACEHOLDER = re.compile(r"\{(\w+)\}")
 # "'{minuut} " aan het begin (of los in de tekst) weghalen als er geen minuut is.
 _NO_MINUTE = re.compile(r"'?\{minuut\}\s*")
-_BASE = set(PLACEHOLDERS) - {"speler", "blessuretijd", "afsluiting"}
+_BASE = set(PLACEHOLDERS) - {"speler", "erin", "eruit", "blessuretijd", "afsluiting"}
 
 
 def allowed_placeholders(key: str) -> set[str]:

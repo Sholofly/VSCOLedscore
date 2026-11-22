@@ -342,6 +342,118 @@ class GoalTests(unittest.TestCase):
         self.assertEqual(lifecycle.update(running, now=1), [])
 
 
+def substitution(event_id=1, side="home", seconds=162, period=0, pairs=(("Speler In", "Speler Uit"),)):
+    """Een wissel zoals LED Scores die stuurt (vastgesteld uit een echt bericht)."""
+    players = [
+        {"in": {"id": f"in{i}", "name": name_in, "number": "", "active": True,
+                "image": f"https://example.test/{i}.jpg", "goalImage": ""},
+         "out": {"id": f"out{i}", "name": name_out, "number": "", "active": True, "image": "", "goalImage": ""}}
+        for i, (name_in, name_out) in enumerate(pairs)
+    ]
+    return {"id": event_id, "type": "substitute",
+            "data": {"seconds": 5, "options": {}, "players": players, "side": side,
+                     "time": seconds, "score": "0 - 0", "period": period}}
+
+
+class SubstitutionTests(unittest.TestCase):
+    def setUp(self):
+        self.lifecycle = MatchLifecycle()
+        self.lifecycle.update(MatchLifecycleTests.payload(started_at=START, seconds=100), now=0)
+
+    def status(self, *events, **kwargs):
+        payload = MatchLifecycleTests.payload(started_at=START, **kwargs)
+        payload["scoreboard_events"] = list(events)
+        return self.lifecycle.update(payload, now=1)
+
+    def test_substitution_event_gives_one_message_with_names_minute_and_photo(self):
+        messages = self.lifecycle.update({"type": "event", "event": substitution()})
+        self.assertEqual(messages, ["'3 Wissel bij Home FC: Speler In vervangt Speler Uit. " + trailer()])
+        self.assertEqual((messages[0].kind, messages[0].image), ("substitution", "https://example.test/0.jpg"))
+
+    def test_the_same_substitution_in_the_next_status_is_not_reported_again(self):
+        self.assertEqual(len(self.lifecycle.update({"type": "event", "event": substitution(7)})), 1)
+        self.assertEqual(self.status(substitution(7)), [])
+        # Komt hij alleen via de status binnen (bv. het losse bericht gemist), dan wel één keer.
+        self.assertEqual(len(self.status(substitution(7), substitution(8))), 1)
+        self.assertEqual(self.status(substitution(7), substitution(8)), [])
+
+    def test_substitutions_from_before_connecting_are_not_reported(self):
+        lifecycle = MatchLifecycle()
+        first = MatchLifecycleTests.payload(started_at=START)
+        first["scoreboard_events"] = [substitution(3)]
+        self.assertEqual(lifecycle.update(first), [])
+        again = MatchLifecycleTests.payload(started_at=START)
+        again["scoreboard_events"] = [substitution(3)]
+        self.assertEqual(lifecycle.update(again), [])
+
+    def test_only_substitutions_of_the_own_club(self):
+        self.assertEqual(self.lifecycle.update({"type": "event", "event": substitution(side="away")}), [])
+
+    def test_double_substitution_names_both_players(self):
+        event = substitution(pairs=(("Anna A", "Bea B"), ("Cor C", "Dirk D")))
+        [message] = self.lifecycle.update({"type": "event", "event": event})
+        self.assertIn("Anna A en Cor C vervangt Bea B en Dirk D", message)
+
+    def test_minute_follows_the_half_and_rest(self):
+        [message] = self.lifecycle.update({"type": "event", "event": substitution(1, seconds=600, period=1)})
+        self.assertTrue(message.startswith("'56 Wissel bij"), message)
+        self.status(rest=True)  # rust: `time` staat op 0, de wissel valt in minuut 45
+        [message] = self.lifecycle.update({"type": "event", "event": substitution(2, seconds=0, period=0)})
+        self.assertTrue(message.startswith("'45 Wissel"), message)
+
+    def test_names_with_double_spaces_are_cleaned_and_other_events_ignored(self):
+        event = substitution(pairs=(("Speler  In", "Speler   Uit"),))
+        [message] = self.lifecycle.update({"type": "event", "event": event})
+        self.assertIn("Speler In vervangt Speler Uit", message)
+        self.assertEqual(self.lifecycle.update({"type": "event", "event": {"id": 99, "type": "mvp"}}), [])
+        self.assertEqual(self.lifecycle.update({"type": "event", "event": None}), [])
+
+    def test_alternative_is_chosen_at_random_when_switched_on(self):
+        offered = []
+
+        def pick(keys):
+            offered.append(list(keys))
+            return keys[-1]
+
+        lifecycle = MatchLifecycle(substitution_alt=lambda: True, choose=pick)
+        lifecycle.update(MatchLifecycleTests.payload(started_at=START, seconds=100))
+        [message] = lifecycle.update({"type": "event", "event": substitution()})
+        self.assertEqual(offered, [["substitution", "substitution_alt"]])
+        self.assertEqual(message, "'3 Wissel bij Home FC: Speler Uit verlaat het veld voor Speler In. " + trailer())
+        self.assertEqual(message.kind, "substitution_alt")
+
+    def test_without_the_alternative_only_the_standard_message_is_used(self):
+        offered = []
+        lifecycle = MatchLifecycle(substitution_alt=lambda: False,
+                                   choose=lambda keys: offered.append(list(keys)) or keys[0])
+        lifecycle.update(MatchLifecycleTests.payload(started_at=START))
+        lifecycle.update({"type": "event", "event": substitution()})
+        self.assertEqual(offered, [["substitution"]])
+
+    def test_an_empty_template_does_not_take_part_in_the_choice(self):
+        offered = []
+        lifecycle = MatchLifecycle(templates={"substitution": ""}, substitution_alt=lambda: True,
+                                   choose=lambda keys: offered.append(list(keys)) or keys[0])
+        lifecycle.update(MatchLifecycleTests.payload(started_at=START))
+        [message] = lifecycle.update({"type": "event", "event": substitution()})
+        self.assertEqual(offered, [["substitution_alt"]])
+        self.assertIn("verlaat het veld voor", message)
+
+    def test_both_messages_occur_with_the_real_random_choice(self):
+        lifecycle = MatchLifecycle(substitution_alt=lambda: True)
+        lifecycle.update(MatchLifecycleTests.payload(started_at=START))
+        kinds = {lifecycle.update({"type": "event", "event": substitution(i)})[0].kind for i in range(60)}
+        self.assertEqual(kinds, {"substitution", "substitution_alt"})
+
+    def test_no_message_outside_a_match_or_with_an_empty_template(self):
+        idle = MatchLifecycle()
+        idle.update(MatchLifecycleTests.payload())  # nog niet begonnen
+        self.assertEqual(idle.update({"type": "event", "event": substitution()}), [])
+        quiet = MatchLifecycle(templates={"substitution": ""})
+        quiet.update(MatchLifecycleTests.payload(started_at=START))
+        self.assertEqual(quiet.update({"type": "event", "event": substitution()}), [])
+
+
 class RawLogTests(unittest.TestCase):
     def test_raw_messages_go_to_file_and_not_to_the_console(self):
         with tempfile.TemporaryDirectory() as folder:

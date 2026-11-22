@@ -72,6 +72,14 @@ Elk bericht is de volledige status (~175 KB JSON). Relevant in `scoreboard_data`
 - `scorers.home[n]` / `.away[n]`: `{"player": {"name", "image", "goalImage", ...}, "time", "period"}`.
   De lijst kan `null` bevatten. **De doelpuntmaker komt ~5 s ná de standwijziging,
   in een apart bericht**; zonder gekozen speler komt er niets.
+- **Wissel**: een los bericht `{"type": "event", "event": {"id", "type": "substitute", "data":
+  {"players": [{"in": speler, "out": speler}], "side", "time", "period", "score"}}}`; ~0,5 s
+  later staat dezelfde gebeurtenis (zelfde `id`) in `scoreboard_events` van de status.
+  `MatchLifecycle._events` meldt hem één keer (`seen_events`), alleen `side == "home"`,
+  niet uit de beginsituatie. Sjabloon `substitution`, plus `substitution_alt` als
+  `Settings.substitution_alt` aan staat (standaard): dan per wissel `random.choice`
+  (injecteerbaar via `choose`); lege sjablonen doen niet mee. Spelers staan in `teams[].lineup.players[]`, wie er op het
+  veld staat in `scoreboard_data.lineups.home` (id's); die lijst veranderde bij de wissel niet.
 
 ## Bronnen
 

@@ -125,6 +125,8 @@ class Settings:
         # Wordt gezet als iets van de Voetbalnederland-bron verandert, zodat die opnieuw kijkt.
         self.voetbalnederland_changed = asyncio.Event()
         self.template_overrides: dict[str, str] = {}
+        # Bij een wissel willekeurig afwisselen tussen het standaard- en het alternatieve bericht.
+        self.substitution_alt = True
         # Eigen hashtag voor één wedstrijd (de lopende, anders de eerstvolgende); leeg = de
         # standaard uit de eerste drie letters van thuis- en uitploeg. Vervalt na het einde.
         self.hashtag_override = ""
@@ -152,6 +154,8 @@ class Settings:
             self.url = raw["url"].strip()
         if isinstance(raw.get("token"), str) and raw["token"].strip():
             self.token = raw["token"].strip()
+        if isinstance(raw.get("substitution_alt"), bool):
+            self.substitution_alt = raw["substitution_alt"]
         if "goal_wait_seconds" in raw and not isinstance(raw["goal_wait_seconds"], bool):
             try:
                 self.goal_wait_seconds = validate_goal_wait(raw["goal_wait_seconds"])
@@ -204,6 +208,7 @@ class Settings:
             "url": self.url,
             "token": self.token,
             "templates": self.template_overrides,
+            "substitution_alt": self.substitution_alt,
             "hashtag_override": self.hashtag_override,
             "goal_wait_seconds": self.goal_wait_seconds,
             "source": self.source,
@@ -301,7 +306,7 @@ class Settings:
         """Terug naar de standaard (na het einde van de wedstrijd waarvoor hij gold)."""
         self.set_hashtag("")
 
-    def set_templates(self, templates: dict[str, str]) -> None:
+    def set_templates(self, templates: dict[str, str], substitution_alt: bool | None = None) -> None:
         """Sla sjablonen op; alleen afwijkingen van de standaard worden bewaard."""
         errors = {
             key: error
@@ -314,8 +319,11 @@ class Settings:
         self.template_overrides = {
             key: value for key, value in merged.items() if value != DEFAULT_TEMPLATES[key]
         }
+        if substitution_alt is not None:
+            self.substitution_alt = bool(substitution_alt)
         self._save()
 
     def reset_templates(self) -> None:
         self.template_overrides = {}
+        self.substitution_alt = True
         self._save()
