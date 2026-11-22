@@ -37,7 +37,7 @@ Gebruikersdocumentatie staat in [README.md](README.md).
 | [push.py](push.py) | Web Push: VAPID-sleutels, aangemelde apparaten (alleen bekende pushdiensten), versturen, "startpagina open" |
 | [state.py](state.py) | `ConnectionState` (status + laatste wedstrijdberichten), `MemoryLogHandler` |
 | [web.py](web.py) | aiohttp-webomgeving: pagina's, inloggen/sessies, live-updates, foto-doorgifte, PWA |
-| `static/` | App-iconen (PNG) |
+| `static/` | Logo (`logo.svg`, bron van de PNG-iconen) en de meldingsiconen (PNG) |
 | `test_*.py` | unittest; `test_connector.py` gebruikt een echte lokale websocketserver |
 
 ## Commando's
@@ -75,7 +75,7 @@ Elk bericht is de volledige status (~175 KB JSON). Relevant in `scoreboard_data`
 
 ## Bronnen
 
-- Er draait precies één bron: `Settings.source` (pagina App, blok Bron), uitgevoerd
+- Er draait precies één bron: `Settings.source` (pagina Connectie, blok Bron en club), uitgevoerd
   door `SourceManager`. Een onbekende keuze valt terug op `scoreboard`. Een
   gecrashte bron wordt gelogd en na `RESTART_DELAY` opnieuw gestart.
 - "Je club": bij Scorebord de thuisploeg op het scorebord; bij Voetbalnederland
@@ -103,7 +103,7 @@ Elk bericht is de volledige status (~175 KB JSON). Relevant in `scoreboard_data`
 
 - De eerste ontvangen status is de beginsituatie: geen meldingen achteraf.
 - Eigen doelpunt wacht tot 20 s op de doelpuntmaker (instelbaar op de pagina
-  App, blok Scorebord, `Settings.goal_wait_seconds`; per doelpunt opgevraagd) en
+  Connectie, blok Scorebord, `Settings.goal_wait_seconds`; per doelpunt opgevraagd) en
   wordt dan als één bericht gemeld; doelpunt tegenstander direct.
 - Stand omlaag = correctie: wachtend doelpunt vervalt, geen melding.
 - Minuten met blessuretijd per helft: eerste helft boven 45 wordt `45+n`, tweede
@@ -115,7 +115,7 @@ Elk bericht is de volledige status (~175 KB JSON). Relevant in `scoreboard_data`
 - `{hashtag}` = `default_hashtag(thuis, uit)` (`messages.py`): eerste drie letters van
   thuis- en uitploeg, klein en zonder cijfers/leestekens (`#vscvsw`; uit bij Hattem
   wordt `#hatvsc`, thuisploeg voorop). Geen vaste `vsc` meer. `Settings.hashtag_override`
-  (pagina App, blok Hashtag) geldt voor één wedstrijd en wordt door de actieve bron
+  (pagina Sjablonen, blok Hashtag) geldt voor één wedstrijd en wordt door de actieve bron
   gewist na het einde (`on_match_end` / `on_end`); hij wordt per bericht opgevraagd.
 - Gedeelde tekst (Delen en de X-link) eindigt met een enter (`share_text`), zodat X
   na een hashtag aan het eind niet het hashtag-venster opent. Het bericht zelf niet.
@@ -136,20 +136,34 @@ Elk bericht is de volledige status (~175 KB JSON). Relevant in `scoreboard_data`
 
 ## Webomgeving
 
-- Gemaakt voor de telefoon: grote tikvlakken (min. 44 px), navigatie op één
-  regel, controleer opmaak op ~390 px breed. Een schermafbeelding kan met Edge
+- Gemaakt voor de telefoon: grote tikvlakken (min. 44 px), menu achter de
+  hamburgerknop in de footer, controleer opmaak op ~390 px breed. Een schermafbeelding kan met Edge
   zonder venster (`msedge --headless=new --screenshot`); Edge heeft een minimale
   vensterbreedte van ~500 px, dus zet de pagina zelf op `width:390px`.
-- Pagina's: `/` berichten + statuslampje, `/me` (Mijn instellingen: meldingen,
-  uitloggen), `/app` (alleen beheerder: blokken Status, Bron, Scorebord,
-  Voetbalnederland, Hashtag, Sjablonen, Logging), `/share/<sleutel>` (deelscherm uit een pushmelding).
+- Berichten (`BASE_PATH`) is de basis. Alle andere pagina's zijn een paneel
+  (`body.sheet`) met een kruisje terug naar `/`; `page()` bepaalt dat uit `active`.
+  Geen kopbalk; op elke pagina (behalve inloggen) een vaste footer (`footer_html`):
+  logo links, naam midden, menu rechts (`menu_html`: `nav_items` behalve Berichten,
+  scheiding, `ACCOUNT_ITEMS`). `main` heeft onderaan ruimte voor de footer.
+- Logo: MDI "scoreboard-outline" + "share-all-outline" (Pictogrammers, Apache 2.0) op
+  een blauw verloop. `static/logo.svg` is de bron (ook favicon); de PNG's (`icon-192`,
+  `icon-512` afgeronde tegel, `icon-maskable-512` met de inhoud op 72 %, `apple-touch-icon`
+  vol vlak, `badge-logo` alleen het witte scorebord, 96 px) zijn ermee gerenderd via Edge zonder venster (DevTools-screenshot met
+  transparante achtergrond).
+- Pagina's: `/` berichten + statuslampje; `/pushmeldingen`, `/account` (weergave: cookie `theme` via POST `/theme`,
+  `data-theme` op `<html>`, zonder keuze volgt de CSS `prefers-color-scheme`; uitloggen),
+  `/me` stuurt door; `/app` (Connectie, alleen beheerder: blokken Bron en club
+  (bovenaan, open; één formulier, samen opgeslagen; club vast bij Scorebord, live zoeken
+  via `/teams` bij Voetbalnederland), het blok van de gekozen bron
+  (`SOURCE_PANELS`), Status, Logging), `/sjablonen` (alleen beheerder: Hashtag en
+  Berichtteksten, `TEMPLATE_BLOCKS`; `app_page` met zo'n blok toont deze pagina), `/share/<sleutel>` (deelscherm uit een pushmelding).
   Live-updates via `/logs/data` (JSON; voor een gebruiker zonder logregels en
   statustabel). Oude adressen (`/status`, `/settings`, `/templates`, `/logs`)
-  sturen door naar `/app#blok`; de POST-adressen `/settings` en `/templates` bestaan nog.
+  sturen door naar `/app#blok` (`/templates` naar `/sjablonen`); de POST-adressen `/settings` en `/templates` bestaan nog.
 - Rollen: beheerder (`WEB_USER`/`WEB_PASSWORD`) en gebruiker
   (`SHARE_USER`/`SHARE_PASSWORD`, optioneel). De rol zit in het ondertekende
   sessiecookie; `ADMIN_PATHS` wordt in de middleware afgeschermd. Nieuwe
-  app-instellingen horen onder `/app` en in `ADMIN_PATHS`, persoonlijke onder `/me`.
+  app-instellingen horen onder `/app` en in `ADMIN_PATHS`, persoonlijke onder `ACCOUNT_ITEMS`.
 
 ## Valkuilen die al eens fout gingen
 
@@ -170,9 +184,9 @@ Elk bericht is de volledige status (~175 KB JSON). Relevant in `scoreboard_data`
   anders weigert py_vapid elke melding (stil, alleen een waarschuwing in de log).
   `validate_subject` controleert dit bij het starten; `RealEncryptionTests` test
   de hele keten (versleuteling, VAPID, ontsleutelen) tegen een lokale pushdienst.
-- Meldingsicoon per soort (`Message.kind` = sjabloonnaam, `notification_icons`): bal
-  bij doelpunten, fluitje bij de rest. De badge (Android-statusbalk) moet een witte vorm
-  op transparant zijn (RGBA); een gevuld icoon wordt daar een wit vierkantje.
+- Meldingsicoon (`notification_icons`): het logo (`icon-192.png`) voor elke soort; de
+  badge (`badge-logo.png`, Android-statusbalk) moet een witte vorm op transparant zijn
+  (RGBA); een gevuld icoon wordt daar een wit vierkantje.
 - Bij pushmeldingen niet in de service worker stil overslaan: iOS kan dan de
   aanmelding intrekken. "Startpagina open" wordt daarom server-side bijgehouden.
 - Patchen via een bash-heredoc maakt van backslash-n soms een echte regelovergang

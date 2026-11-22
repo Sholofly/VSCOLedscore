@@ -39,16 +39,15 @@ MAX_SUBSCRIPTIONS = 20
 PRESENT_SECONDS = 6.0  # zo lang na de laatste update geldt de startpagina als "open"
 TTL_SECONDS = 600  # een melding die na 10 minuten nog niet is afgeleverd, vervalt
 TITLE = "Matchshare"
-# Icoon per soort bericht: een bal bij doelpunten, anders een fluitje. Het icoon is
-# gekleurd; de badge (statusbalk van Android) is een witte vorm op transparant, want
-# Android gebruikt alleen de vorm.
-GOAL_KINDS = {"goal_home", "goal_home_no_scorer", "goal_away"}
+# Elke melding toont het logo. De badge (statusbalk van Android) is een witte vorm op
+# transparant (het scorebord uit het logo), want Android gebruikt alleen de vorm.
+NOTIFICATION_ICON = "/static/icon-192.png"
+NOTIFICATION_BADGE = "/static/badge-logo.png"
 
 
 def notification_icons(kind: str | None) -> tuple[str, str]:
-    """(icoon, badge) voor een soort bericht; zonder soort (testmelding) de bal."""
-    name = "ball" if kind is None or kind in GOAL_KINDS else "whistle"
-    return f"/static/icon-{name}.png", f"/static/badge-{name}.png"
+    """(icoon, badge) voor een melding: voor elke soort bericht het logo."""
+    return NOTIFICATION_ICON, NOTIFICATION_BADGE
 
 
 # Contactadres voor de pushdiensten: "mailto:..." of "https://domein" (zonder pad).

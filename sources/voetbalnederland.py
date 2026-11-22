@@ -302,6 +302,13 @@ class VoetbalnederlandSource(Source):
         self._match = value
 
     # ------------------------------------------------------------- weergave
+    club_hint = "nog geen team gekozen"
+
+    def club(self) -> str | None:
+        if not self.settings.team_id:
+            return None
+        return self.settings.club_name or self.settings.team_name or str(self.settings.team_id)
+
     def led(self) -> tuple[str, str]:
         return self.state.level, self.state.status
 

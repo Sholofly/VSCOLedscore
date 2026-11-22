@@ -74,6 +74,8 @@ class MatchLifecycle:
         self.active = False
         self.rest = False
         self.score: tuple[Any, Any] | None = None
+        # Thuis- en uitploeg van de laatst ontvangen status (None = nog niets ontvangen)
+        self.teams: tuple[str, str] | None = None
         # Doelpuntmakers: (kant, positie, naam) -> foto-URL (of None)
         self.scorers: dict[tuple[str, int, str], str | None] = {}
         # Eigen doelpunt dat wacht op een doelpuntmaker: (context, deadline)
@@ -132,6 +134,7 @@ class MatchLifecycle:
         is_active = bool(started_at) and not bool(ended_at)
         is_rest = bool(data.get("rest"))
         home, away = self._team_names(payload, data)
+        self.teams = (home, away)
         scoreboard = data.get("scoreboard")
         scoreboard = scoreboard if isinstance(scoreboard, dict) else {}
         score = (scoreboard.get("home"), scoreboard.get("away"))
@@ -366,6 +369,11 @@ class Connector:
             return False
         return True
 
+    @property
+    def teams(self) -> tuple[str, str] | None:
+        """Thuis- en uitploeg op het scorebord, als er al een status is ontvangen."""
+        return self._lifecycle.teams if self._lifecycle is not None else None
+
     def _publish(self, events: list[str]) -> None:
         self.publish(events)
 
@@ -548,6 +556,17 @@ class ScoreboardSource(Source):
 
     def status_rows(self) -> list[StatusRow]:
         return connection_rows(self.settings, self.state)
+
+    club_hint = "thuisploeg op het scorebord (nog geen status ontvangen)"
+
+    def club(self) -> str | None:
+        teams = self.connector.teams
+        return teams[0] if teams else None
+
+    @property
+    def match(self) -> dict | None:
+        teams = self.connector.teams
+        return {"homeClub": teams[0], "awayClub": teams[1]} if teams else None
 
 
 def connection_rows(settings: Settings, state: ConnectionState) -> list[StatusRow]:

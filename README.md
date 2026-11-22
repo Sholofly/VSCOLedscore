@@ -78,7 +78,7 @@ git pull && docker compose pull && docker compose up -d
   `matchshare` (was `websocket-logger`). Gebruik één keer
   `docker compose up -d --remove-orphans`, zodat de oude container verdwijnt.
   Het volume `scorebord-data` houdt bewust zijn naam: je instellingen, sessies
-  en meldingen blijven bewaard. Kies daarna onder App > Bron de bron.
+  en meldingen blijven bewaard. Kies daarna onder Connectie > Bron en club de bron.
 
 - **Wacht tot de image klaar is.** Na elke push bouwt GitHub de image; dat duurt
   een paar minuten. Pull je te vroeg, dan krijg je nog de oude versie. Kijk bij
@@ -125,12 +125,16 @@ met `Ctrl+C`.
 
 ## Webomgeving
 
-De webomgeving is gemaakt voor de telefoon en kent twee rollen:
+De webomgeving is gemaakt voor de telefoon. **Berichten** is altijd de basis.
+Onderaan staat altijd een footer met links het logo (terug naar Berichten), in
+het midden de naam en rechts het menu (hamburgerknop). Elke andere pagina opent
+als paneel over Berichten en sluit je met het kruisje rechtsboven (of Escape).
+Er zijn twee rollen:
 
 | Rol | Inloggen met | Ziet |
 |---|---|---|
-| Beheerder | `WEB_USER` / `WEB_PASSWORD` | Berichten · Mijn instellingen · App |
-| Gebruiker | `SHARE_USER` / `SHARE_PASSWORD` | Berichten · Mijn instellingen |
+| Beheerder | `WEB_USER` / `WEB_PASSWORD` | Berichten · Connectie · Sjablonen · Pushmeldingen · Account |
+| Gebruiker | `SHARE_USER` / `SHARE_PASSWORD` | Berichten · Pushmeldingen · Account |
 
 De gebruikerslogin is bedoeld voor anderen die berichten delen; zonder
 `SHARE_PASSWORD` staat hij uit. Een gebruiker kan niets aan de app wijzigen (de
@@ -160,34 +164,41 @@ per pagina toegestaan en alle uitvoer wordt ge-escaped.
     wedstrijdbericht voorkomen. Let op: het gaat om foto's van spelers; of ze op
     X mogen, bepaalt de club.
   - Berichten boven 280 tekens worden gemarkeerd.
-- **Mijn instellingen** (per gebruiker en apparaat): pushmeldingen aan/uit met
-  een testmelding, en uitloggen.
-- **App** (alleen beheerder, geldt voor iedereen), met uitklapbare blokken die
-  elk een eigen opslaanknop hebben:
-  - **Status:** de gekozen bron en zijn status (bij het scorebord: verbinding,
-    laatste bericht en fout, URL en token met vervaldatum; bij Voetbalnederland:
-    team, wedstrijd van vandaag, laatst bevraagd). Het lampje linkt hierheen.
-  - **Bron:** kies welke bron de berichten levert (zie hieronder).
+- **Pushmeldingen** (per gebruiker en apparaat): aan/uit met een testmelding.
+- **Account:** de weergave (Systeem, Licht of Donker; Systeem volgt je apparaat,
+  per apparaat bewaard), met welke rol je bent ingelogd, en uitloggen.
+- **Connectie** (adres `/app`; alleen beheerder, geldt voor iedereen).
+  Uitklapbare blokken, elk met een eigen opslaanknop; van de bronnen zie je
+  alleen het blok van de gekozen bron:
+  - **Bron en club** (staat bovenaan en open): kies de bron en je club en sla
+    ze samen op met Opslaan. Bij Scorebord ligt de club vast (de thuisploeg);
+    bij Voetbalnederland typ je een clubnaam en tik je de club aan in de
+    resultaten die tijdens het typen verschijnen.
   - **Scorebord:** URL en token, en de wachttijd op de doelpuntmaker (standaard
     20 seconden, 0 = niet wachten). Het token staat verborgen in het veld en
     maak je zichtbaar met het oog-icoon; het staat alleen hier. Een nieuwe URL
     of een nieuw token bouwt de verbinding direct opnieuw op. De URL mag geen
     `token=` bevatten.
-  - **Voetbalnederland:** team zoeken en kiezen, clubnaam in berichten,
+  - **Voetbalnederland:** clubnaam in berichten,
     interval en het adres van de API.
-  - **Hashtag:** een eigen hashtag voor één wedstrijd (zie hieronder).
-  - **Sjablonen:** de teksten van alle berichten, met voorbeeld. Een leeg
-    sjabloon betekent dat dat bericht niet wordt verstuurd.
+  - **Status:** de gekozen bron en zijn status (bij het scorebord: verbinding,
+    laatste bericht en fout, URL en token met vervaldatum; bij Voetbalnederland:
+    team, wedstrijd van vandaag, laatst bevraagd). Het lampje linkt hierheen.
   - **Logging:** de laatste 300 regels van `app.log` (live, nieuwste bovenaan)
     en de laatste 10 ruwe berichten met een samenvatting; uitgeklapt zie je de
     wedstrijdstatus (`scoreboard_data`) als ingesprongen JSON.
 
   De oude adressen `/status`, `/settings`, `/templates` en `/logs` sturen door
   naar het juiste blok.
+- **Sjablonen** (adres `/sjablonen`; alleen beheerder, geldt voor iedereen):
+  - **Hashtag:** een eigen hashtag voor de wedstrijd van je club die bezig is,
+    anders de eerstvolgende; het blok toont welke wedstrijd dat is (zie hieronder).
+  - **Berichtteksten:** de teksten van alle berichten, met voorbeeld. Een leeg
+    sjabloon betekent dat dat bericht niet wordt verstuurd.
 
 ## Bronnen
 
-Er draait altijd precies één bron: de bron die je kiest onder App > Bron. Een
+Er draait altijd precies één bron: de bron die je kiest onder Connectie > Bron en club. Een
 andere bron kiezen stopt de vorige direct. De berichten, sjablonen, hashtag,
 meldingen en de Delen-knop werken voor elke bron hetzelfde.
 
@@ -195,11 +206,11 @@ meldingen en de Delen-knop werken voor elke bron hetzelfde.
   thuisploeg op het scorebord. Elk bericht heeft een speelminuut (met
   blessuretijd per helft); een eigen doelpunt wacht kort op de doelpuntmaker.
 - **Voetbalnederland:** standen van het amateurvoetbal, door vrijwilligers
-  bijgewerkt. Je club is het team dat je onder App > Voetbalnederland kiest,
+  bijgewerkt. Je club kies je onder Connectie > Bron en club,
   thuis of uit. De app haalt het programma van vandaag op en bevraagt de
   wedstrijd vanaf een kwartier voor de aftrap elke 30 seconden (instelbaar),
   tot hij is afgelopen. Er is geen sleutel nodig; een ander adres van de API
-  kan met `VOETBALNEDERLAND_URL` of onder App.
+  kan met `VOETBALNEDERLAND_URL` of onder Connectie.
   - Begin, rust, tweede helft en einde komen **zonder minuut**; doelpunten
     krijgen de minuut en de doelpuntmaker. De afsluiting staat in de echte
     volgorde, bv. `Hattem - VSCO 61 0-1. #hatvsc`. Met "Clubnaam in berichten"
@@ -211,7 +222,7 @@ meldingen en de Delen-knop werken voor elke bron hetzelfde.
 **Een bron toevoegen** (voor ontwikkelaars): maak in `sources/` een subklasse
 van `Source` met `id`, `label`, `description`, `run`, `led` en `status_rows`,
 en zet hem in `build_sources` in `sources/__init__.py`. Hij verschijnt dan
-vanzelf onder App > Bron. Eigen instellingen krijgen een blok in `web.py`.
+vanzelf onder Connectie > Bron en club. Eigen instellingen krijgen een blok in `web.py`.
 
 ## Pushmeldingen
 
@@ -220,9 +231,9 @@ dicht is. Tik je erop, dan opent een **deelscherm** met alleen dat bericht (en
 de foto): tik op Delen. Zit je al op de startpagina, dan krijg je geen melding,
 want daar zie je het bericht al.
 
-- De melding heeft een **fluitje** bij begin, rust, tweede helft en einde, en
-  een **bal** bij een doelpunt.
-- Aanzetten per apparaat onder **Mijn instellingen**, kaart Meldingen (met een knop
+- De melding toont het **logo**; in de statusbalk van Android staat het scorebord
+  uit het logo.
+- Aanzetten per apparaat via het menu, **Pushmeldingen** (met een knop
   voor een testmelding). Werkt alleen via **HTTPS**; op een iPhone alleen als de
   app op je beginscherm staat (iOS 16.4 of nieuwer).
 - De melding gaat versleuteld via de pushdienst van je telefoon (Apple, Google,
@@ -244,6 +255,11 @@ adresbalk. Dat werkt alleen via **HTTPS** (net als delen met foto).
 - **Pc (Chrome/Edge):** gebruik het installatie-icoon in de adresbalk.
 
 De app bewaart geen pagina's op je apparaat; zonder netwerk zie je een melding.
+
+Het logo (`static/logo.svg`, plus de PNG-iconen voor de app en de meldingen) combineert de iconen
+"scoreboard-outline" en "share-all-outline" uit
+[Material Design Icons](https://pictogrammers.com/library/mdi/) van
+Pictogrammers (licentie Apache 2.0).
 
 ## Berichten en sjablonen
 
@@ -272,7 +288,7 @@ eerste drie letters van de **uitploeg**, zonder cijfers en leestekens:
 uitwedstrijd staat de thuisploeg voorop: `Hattem - VSCO 61` wordt `#hatvsc`. Dit
 geldt voor elke bron.
 
-Voor één wedstrijd kun je een eigen hashtag instellen op de pagina App, blok
+Voor één wedstrijd kun je een eigen hashtag instellen op de pagina Sjablonen, blok
 **Hashtag** (met of zonder `#`; letters, cijfers en een underscore, maximaal 30
 tekens). Hij geldt direct, voor de wedstrijd die nu bezig is of anders voor de
 eerstvolgende, en vervalt zodra die wedstrijd is afgelopen: daarna geldt weer de

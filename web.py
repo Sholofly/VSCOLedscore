@@ -5,7 +5,7 @@ service worker, iconen) vereist inloggen. Dat gaat via de inlogpagina met een
 ondertekend sessiecookie (HttpOnly, SameSite=Lax, standaard 30 dagen), of voor
 scripts via HTTP Basic. Formulieren hebben een CSRF-token, scripts zijn alleen
 met een nonce per pagina toegestaan en alle uitvoer wordt ge-escaped. Het token
-staat alleen onder App > Scorebord (verborgen tot je het oog-icoon gebruikt).
+staat alleen onder Connectie > Scorebord (verborgen tot je het oog-icoon gebruikt).
 """
 
 import asyncio
@@ -18,6 +18,7 @@ import os
 import secrets
 import time
 from collections import OrderedDict
+from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import quote, urlencode
 
@@ -58,13 +59,14 @@ APP_LOG_LINES = 300
 RAW_LOG_ENTRIES = 10
 RAW_ENTRY_CHARS = 1500
 MESSAGES = {
+    "theme": "Weergave opgeslagen.",
     "url": "URL opgeslagen. De verbinding wordt opnieuw opgebouwd.",
     "token": "Token opgeslagen. De verbinding wordt opnieuw opgebouwd.",
     "templates": "Sjablonen opgeslagen.",
     "reset": "Sjablonen hersteld naar de standaardteksten.",
     "goal_wait": "Wachttijd opgeslagen. Hij geldt vanaf het volgende doelpunt.",
-    "source": "Bron opgeslagen.",
-    "team": "Team opgeslagen. Het programma wordt opnieuw opgehaald.",
+    "source": "Bron en club opgeslagen.",
+    "team": "Club opgeslagen. Het programma wordt opnieuw opgehaald.",
     "club_name": "Clubnaam opgeslagen.",
     "poll": "Interval opgeslagen.",
     "voetbalnederland_url": "Adres van de Voetbalnederland-bron opgeslagen.",
@@ -72,22 +74,49 @@ MESSAGES = {
     "hashtag_reset": "Hashtag hersteld naar de standaard.",
 }
 
+# Kleuren voor donker: bij "Systeem" als het apparaat donker staat, en altijd bij "Donker".
+DARK_VARS = (
+    "--bg:#14171b;--card:#1d2127;--text:#e6e9ed;--muted:#9aa5b1;--line:#2f353d;--accent:#6ea8ff;"
+    "--on-accent:#0b1526;--ok:#4cc26a;--warn:#e0b341;--err:#ff7b72;--code:#262b32;color-scheme:dark"
+)
 CSS = """
 :root{--bg:#f6f7f9;--card:#fff;--text:#1b1f24;--muted:#5b6670;--line:#d9dee4;
---accent:#1f5fbf;--on-accent:#fff;--ok:#1a7f37;--warn:#9a6700;--err:#c4302b;--code:#eef1f4}
-@media (prefers-color-scheme:dark){:root{--bg:#14171b;--card:#1d2127;--text:#e6e9ed;
---muted:#9aa5b1;--line:#2f353d;--accent:#6ea8ff;--on-accent:#0b1526;--ok:#4cc26a;--warn:#e0b341;
---err:#ff7b72;--code:#262b32}}
+--accent:#1f5fbf;--on-accent:#fff;--ok:#1a7f37;--warn:#9a6700;--err:#c4302b;--code:#eef1f4;color-scheme:light}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){@@DARK@@}}
+:root[data-theme=dark]{@@DARK@@}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,sans-serif}
-header{background:var(--card);border-bottom:1px solid var(--line)}
-nav{max-width:60rem;margin:0 auto;padding:0 8px;display:flex;gap:0;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}nav::-webkit-scrollbar{display:none}
-nav a{padding:14px 9px;color:var(--muted);text-decoration:none;border-bottom:3px solid transparent;white-space:nowrap;font-size:.95rem}
-nav a.active{color:var(--text);border-color:var(--accent)}
 .logout{margin-top:4px}
+.app-footer{position:fixed;left:0;right:0;bottom:0;z-index:20;background:var(--card);border-top:1px solid var(--line);
+padding-bottom:env(safe-area-inset-bottom)}
+.app-footer-inner{max-width:60rem;margin:0 auto;height:60px;padding:0 8px 0 12px;display:grid;
+grid-template-columns:1fr auto 1fr;align-items:center}
+.brand-logo{display:inline-flex;width:44px;height:44px;align-items:center}
+.brand-logo img{width:36px;height:36px;display:block}
+.brand-name{font-weight:700;letter-spacing:.02em}
+.app-menu{justify-self:end;position:relative}
+.app-menu summary{list-style:none;display:flex;align-items:center;justify-content:center;width:48px;height:48px;
+border-radius:50%;color:var(--text);cursor:pointer}
+.app-menu[open] summary,.app-menu summary:hover{background:var(--bg)}
+.app-menu summary::-webkit-details-marker{display:none}
+.menu-list{position:absolute;right:0;bottom:56px;min-width:12rem;background:var(--card);border:1px solid var(--line);
+border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,.25);padding:4px 0;display:flex;flex-direction:column}
+.menu-list a{padding:12px 16px;min-height:44px;color:var(--text);text-decoration:none}
+.menu-list a.active{font-weight:600;color:var(--accent)}
+.menu-list hr{border:0;border-top:1px solid var(--line);margin:4px 0}
 .login{max-width:24rem}
 .titlebar{display:flex;align-items:center;justify-content:space-between;gap:8px 12px;flex-wrap:wrap;margin:8px 0 12px}
 .titlebar h1{margin:0}
+.titlebar-end{display:flex;align-items:center;gap:8px;margin-left:auto}
+body.base main,body.sheet main{padding-bottom:84px}
+body.sheet .titlebar{position:sticky;top:0;z-index:10;background:var(--bg);margin:0 -16px 12px;padding:8px 16px;
+border-bottom:1px solid var(--line)}
+a.close{display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;border-radius:50%;
+color:var(--text);margin-right:-8px}
+a.close:hover{background:var(--card)}
+body.sheet main{animation:sheet-in .2s ease-out}
+@keyframes sheet-in{from{transform:translateY(24px);opacity:0}to{transform:none;opacity:1}}
+@media (prefers-reduced-motion:reduce){body.sheet main{animation:none}}
 .led-bar{display:inline-flex;align-items:center;gap:8px;min-height:36px;padding:4px 12px;border:1px solid var(--line);
 border-radius:99px;background:var(--card);color:var(--text);text-decoration:none;font-size:.9rem}
 .led{width:12px;height:12px;border-radius:50%;background:var(--muted);flex:none}
@@ -112,6 +141,7 @@ label.choice input{width:20px;height:20px;margin:0;accent-color:var(--accent)}
 label.choice-source{align-items:flex-start;padding:8px 0}label.choice-source input{margin-top:3px;flex:none}
 form.result{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0;
 border-bottom:1px solid var(--line)}form.result button{padding:6px 14px}
+.club{font-size:1.05rem;margin:0 0 12px}
 .note{border-left:3px solid var(--warn);padding:6px 10px;margin:0 0 12px;color:var(--muted);font-size:.92rem}
 details.raw{border-bottom:1px solid var(--line);padding:8px 0}details.raw:last-child{border-bottom:0}
 details.raw summary{cursor:pointer;word-break:break-word}details.raw pre{margin-top:8px;max-height:60vh}input.num{max-width:8rem}
@@ -121,8 +151,14 @@ h1{font-size:1.4rem;margin:8px 0 16px}h2{font-size:1.1rem;margin:0 0 8px}
 table{border-collapse:collapse;width:100%}td,th{text-align:left;padding:6px 8px;
 border-bottom:1px solid var(--line);vertical-align:top}th{width:14rem;color:var(--muted);font-weight:500}
 label{display:block;font-weight:600;margin:12px 0 4px}
-input[type=text],input[type=password],input[type=url],input[type=number]{width:100%;padding:8px;border:1px solid var(--line);
+select,input[type=search],input[type=text],input[type=password],input[type=url],input[type=number]{width:100%;padding:8px;border:1px solid var(--line);
 border-radius:6px;background:var(--bg);color:var(--text);font:inherit}
+select{min-height:44px}
+[hidden]{display:none!important}
+.team-results{margin-top:4px}
+label.team-pick{align-items:flex-start;padding:6px 0;line-height:1.3}label.team-pick input{margin-top:2px;flex:none}
+label.team-pick .muted{font-size:.85rem}
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 button{padding:8px 16px;border:0;border-radius:6px;background:var(--accent);color:var(--on-accent);font:inherit;cursor:pointer}
 button.secondary{background:transparent;color:var(--text);border:1px solid var(--line)}
 .msg{padding:10px 14px;border-radius:6px;margin-bottom:16px;border:1px solid var(--line)}
@@ -160,6 +196,7 @@ border:0;color:var(--muted);padding:8px;line-height:0;border-radius:6px}
 .reveal .eye-closed,.reveal.on .eye-open{display:none}.reveal.on .eye-closed{display:inline}
 @media (max-width:600px){th{width:auto;display:block;border:0;padding-bottom:0}td{display:block}}
 """
+CSS = CSS.replace("@@DARK@@", DARK_VARS)
 
 REVEAL_JS = (
     "document.querySelectorAll('.reveal').forEach(function(b){b.addEventListener('click',function(){"
@@ -254,16 +291,82 @@ EYE_ICONS = (
     '<path d="M14.12 14.12A3 3 0 1 1 9.88 9.88"/><path d="M1 1l22 22"/></svg>'
 )
 
+# Weergave per apparaat, in een cookie (zodat de server direct het goede thema stuurt).
+THEME_COOKIE = "theme"
+THEMES = {"system": "Systeem", "light": "Licht", "dark": "Donker"}
+
+
+def theme_of(request: web.Request) -> str:
+    chosen = request.cookies.get(THEME_COOKIE, "")
+    return chosen if chosen in THEMES else "system"
+
+
 ROLE_ADMIN = "admin"  # beheerder: alles, ook de app-instellingen
 ROLE_USER = "user"  # gebruiker: berichten delen en eigen instellingen
 ROLE_LABELS = {ROLE_ADMIN: "beheerder", ROLE_USER: "gebruiker"}
 # Alleen voor de beheerder (ook de oude adressen, die naar /app doorsturen).
-ADMIN_PATHS = {"/app", "/status", "/settings", "/templates", "/templates/reset", "/logs"}
+ADMIN_PATHS = {"/app", "/sjablonen", "/teams", "/status", "/settings", "/templates", "/templates/reset", "/logs"}
 
 
 def nav_items(role: str | None) -> tuple[tuple[str, str], ...]:
-    items = (("/", "Berichten"), ("/me", "Mijn instellingen"))
-    return items + (("/app", "App"),) if role == ROLE_ADMIN else items
+    items = (("/", "Berichten"),)
+    return items + (("/app", "Connectie"), ("/sjablonen", "Sjablonen")) if role == ROLE_ADMIN else items
+
+
+# Berichten is de basis; alle andere pagina's openen als paneel erover, met een kruisje terug.
+BASE_PATH = "/"
+CLOSE_ICON = (
+    '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" fill="none" stroke="currentColor" '
+    'stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>'
+)
+# Escape sluit een paneel (behalve tijdens het typen in een veld).
+SHEET_JS = (
+    "document.addEventListener('keydown',function(e){if(e.key!=='Escape')return;"
+    "var t=e.target&&e.target.tagName;if(t==='INPUT'||t==='TEXTAREA'||t==='SELECT')return;location.href='/';});"
+)
+# Tweede deel van het menu: per gebruiker en apparaat.
+ACCOUNT_ITEMS = (("/pushmeldingen", "Pushmeldingen"), ("/account", "Account"))
+MENU_ICON = (
+    '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" fill="none" stroke="currentColor" '
+    'stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>'
+)
+
+
+def footer_html(role: str | None, active: str) -> str:
+    """Vaste footer op elke pagina: logo (naar Berichten), de naam van de app en het menu."""
+    return (
+        '<footer class="app-footer"><div class="app-footer-inner">'
+        f'<a href="{BASE_PATH}" class="brand-logo" aria-label="Naar de berichten">'
+        '<img src="/static/logo.svg" alt="" width="36" height="36"></a>'
+        '<span class="brand-name">Matchshare</span>'
+        f"{menu_html(role, active)}</div></footer>"
+    )
+
+
+def menu_html(role: str | None, active: str) -> str:
+    """Het menu (hamburger, rechts in de footer) met de panelen die over Berichten
+    openen: eerst die van de app, dan die van het account."""
+    def links(items: tuple[tuple[str, str], ...]) -> str:
+        return "".join(
+            f'<a href="{path}"{" class=active aria-current=page" if path == active else ""}>{label}</a>'
+            for path, label in items
+        )
+
+    app_links = links(tuple(item for item in nav_items(role) if item[0] != BASE_PATH))
+    app_links += "<hr>" if app_links else ""
+    return (
+        '<details class="app-menu" id="menu">'
+        f'<summary aria-label="Menu" title="Menu">{MENU_ICON}</summary>'
+        f'<nav class="menu-list" aria-label="Menu">{app_links}{links(ACCOUNT_ITEMS)}</nav></details>'
+    )
+
+
+# Menu sluiten bij een tik ernaast of op Escape.
+MENU_JS = (
+    "(function(){var m=document.getElementById('menu');if(!m)return;"
+    "document.addEventListener('click',function(e){if(m.open&&!m.contains(e.target))m.open=false;});"
+    "document.addEventListener('keydown',function(e){if(e.key==='Escape')m.open=false;});})();"
+)
 
 
 def esc(value: object) -> str:
@@ -292,6 +395,7 @@ SW_REGISTER_JS = (
 APP_HEAD = (
     '<link rel="manifest" href="/manifest.webmanifest">'
     f'<meta name="theme-color" content="{THEME_COLOR}">'
+    '<link rel="icon" href="/static/logo.svg" type="image/svg+xml">'
     '<link rel="icon" href="/static/icon-192.png" type="image/png">'
     '<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">'
     '<meta name="apple-mobile-web-app-capable" content="yes">'
@@ -310,20 +414,26 @@ def page(
     show_nav: bool = True,
     aside: str = "",
 ) -> web.Response:
-    links = "".join(
-        f'<a href="{path}"{" class=active" if path == active else ""}>{label}</a>'
-        for path, label in nav_items(request.get("role"))
+    base = show_nav and active == BASE_PATH
+    sheet = show_nav and not base
+    nav = footer_html(request.get("role"), active) if show_nav else ""
+    close = (
+        f'<a href="{BASE_PATH}" class="close" aria-label="Sluiten" title="Sluiten">{CLOSE_ICON}</a>' if sheet else ""
     )
-    nav = f"<header><nav>{links}</nav></header>" if show_nav else ""
+    extra_js = (MENU_JS if show_nav else "") + (SHEET_JS if sheet else "")
     meta = f'<meta http-equiv="refresh" content="{refresh}">' if refresh else ""
     nonce = esc(request["nonce"])
-    script_tag = f'<script nonce="{nonce}">{SW_REGISTER_JS}{script}</script>'
+    script_tag = f'<script nonce="{nonce}">{SW_REGISTER_JS}{extra_js}{script}</script>'
+    body_class = ' class="base"' if base else ' class="sheet"' if sheet else ""
+    theme = theme_of(request)
+    theme_attr = f' data-theme="{theme}"' if theme != "system" else ""
     document = (
-        '<!doctype html><html lang="nl"><head><meta charset="utf-8">'
-        '<meta name="viewport" content="width=device-width,initial-scale=1">'
+        f'<!doctype html><html lang="nl"{theme_attr}><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">'
         f"{APP_HEAD}{meta}<title>{esc(title)} - Matchshare</title><style>{CSS}</style></head>"
-        f'<body>{nav}<main><div class="titlebar"><h1>{esc(title)}</h1>{aside}</div>{body}</main>'
-        f"{script_tag}</body></html>"
+        f'<body{body_class}><main><div class="titlebar"><h1>{esc(title)}</h1>'
+        f'<div class="titlebar-end">{aside}{close}</div></div>{body}</main>'
+        f"{nav}{script_tag}</body></html>"
     )
     return web.Response(text=document, content_type="text/html")
 
@@ -348,7 +458,8 @@ def status_table_html(app: web.Application) -> str:
     manager = app.get("sources")
     if manager is not None:
         source = manager.active()
-        rows = [("Bron", source.label, None)] + source.status_rows()
+        rows = [("Bron", source.label, None), ("Je club", source.club() or source.club_hint, None)]
+        rows += source.status_rows()
     else:
         rows = connection_rows(app["settings"], app["state"])
     cells = []
@@ -368,7 +479,7 @@ def led_state(app: web.Application) -> tuple[str, str]:
 
 
 def led_html(request: web.Request) -> str:
-    """Statuslampje, live bijgewerkt. Voor de beheerder een link naar de status onder App."""
+    """Statuslampje, live bijgewerkt. Voor de beheerder een link naar de status onder Connectie."""
     level, status = led_state(request.app)
     inner = (
         f'<span class="led {esc(level)}" aria-hidden="true"></span>'
@@ -391,27 +502,65 @@ async def messages_page(request: web.Request) -> web.Response:
     return page(request, "Berichten", "/", body, script=LIVE_JS, aside=led_html(request))
 
 
-async def me_page(request: web.Request) -> web.Response:
-    """Mijn instellingen: alleen wat bij deze gebruiker en dit apparaat hoort."""
+async def push_page(request: web.Request) -> web.Response:
+    """Pushmeldingen voor dit apparaat (per gebruiker en apparaat)."""
+    body = push_card(request) or '<div class="card"><p class="muted">Pushmeldingen zijn niet ingesteld.</p></div>'
+    return page(request, "Pushmeldingen", "/pushmeldingen", body, script=LIVE_JS + PUSH_JS, aside=led_html(request))
+
+
+async def account_page(request: web.Request) -> web.Response:
+    """Account: met welke rol je op dit apparaat bent ingelogd, en uitloggen."""
     role = request.get("role")
-    push = push_card(request) or (
-        '<div class="card"><h2>Meldingen</h2><p class="muted">Meldingen zijn niet ingesteld.</p></div>'
+    current = theme_of(request)
+    radios = "".join(
+        f'<label class="choice"><input type="radio" name="theme" value="{value}"'
+        f'{" checked" if value == current else ""}>{label}</label>'
+        for value, label in THEMES.items()
     )
     body = (
-        f"{push}"
+        f"{flash(request)}"
+        '<div class="card"><h2>Weergave</h2>'
+        '<p class="muted small">Systeem volgt de instelling van je apparaat (licht of donker). '
+        "Geldt voor dit apparaat.</p>"
+        '<form method="post" action="/theme" id="theme-form">'
+        f'{csrf_field(request)}{radios}'
+        '<div class="row"><button type="submit">Weergave opslaan</button></div></form></div>'
         '<div class="card"><h2>Account</h2>'
         f'<p>Ingelogd als <strong>{esc(ROLE_LABELS.get(role, role))}</strong> op dit apparaat.</p>'
         '<form method="post" action="/logout" class="logout">'
         f'{csrf_field(request)}<button type="submit" class="secondary">Uitloggen</button></form></div>'
     )
-    return page(request, "Mijn instellingen", "/me", body, script=LIVE_JS + PUSH_JS, aside=led_html(request))
+    return page(request, "Account", "/account", body, script=LIVE_JS + THEME_JS, aside=led_html(request))
+
+
+# Een andere weergave kiezen slaat direct op (de knop blijft voor zonder JavaScript).
+THEME_JS = (
+    "(function(){var f=document.getElementById('theme-form');if(!f)return;"
+    "f.addEventListener('change',function(){f.submit();});})();"
+)
+
+
+async def theme_post(request: web.Request) -> web.Response:
+    """Weergave voor dit apparaat opslaan (Systeem, Licht of Donker)."""
+    chosen = str(request["form"].get("theme", ""))
+    if chosen not in THEMES:
+        raise web.HTTPBadRequest(text="Onbekende weergave.")
+    response = web.HTTPSeeOther("/account?msg=theme")
+    if chosen == "system":
+        response.del_cookie(THEME_COOKIE, path="/")
+    else:
+        response.set_cookie(
+            THEME_COOKIE, chosen, max_age=400 * 86400, path="/", httponly=True, samesite="Lax",
+            secure=is_https(request),
+        )
+    raise response
 
 
 def push_card(request: web.Request) -> str:
     if request.app["push"] is None:
         return ""
     return (
-        f'<div class="card" id="push" data-csrf="{esc(request.app["csrf"])}"><h2>Meldingen</h2>'
+        f'<div class="card" id="push" data-csrf="{esc(request.app["csrf"])}">'
         '<p class="muted small">Een melding bij elk wedstrijdbericht, ook als de app dicht is. Tik erop om het '
         "bericht direct te delen. Zit je al op de startpagina, dan krijg je geen melding. Per apparaat aanzetten; "
         "werkt via HTTPS, op een iPhone alleen als de app op je beginscherm staat.</p>"
@@ -428,9 +577,8 @@ async def share_page(request: web.Request) -> web.Response:
         raise web.HTTPSeeOther("/")
     body = (
         f'<div class="card"><div id="one-message">{messages_html([message_item(message)])}</div></div>'
-        '<p><a href="/">Alle berichten</a></p>'
     )
-    return page(request, "Delen", "/", body, script=LIVE_JS, aside=led_html(request))
+    return page(request, "Delen", "/share", body, script=LIVE_JS, aside=led_html(request))
 
 
 def connection_html(
@@ -478,15 +626,17 @@ def hashtag_html(request: web.Request, hashtag_error: str = "", hashtag_value: s
     settings: Settings = request.app["settings"]
     manager = request.app.get("sources")
     match = manager.active().match if manager is not None else None
-    known = ""
     if isinstance(match, dict) and match.get("homeClub") and match.get("awayClub"):
         home, away = str(match["homeClub"]), str(match["awayClub"])
         known = (
-            f'<p class="muted small">Wedstrijd van vandaag: {esc(home)} - {esc(away)}. '
-            f"Standaard: <code>{esc(default_hashtag(home, away))}</code></p>"
+            f'<p class="small">Wedstrijd: <strong>{esc(home)} - {esc(away)}</strong> '
+            f"(standaard <code>{esc(default_hashtag(home, away))}</code>)</p>"
         )
+    else:
+        known = '<p class="small">Wedstrijd: nog niet bekend bij de bron.</p>'
     current = (
-        f"Nu ingesteld voor de volgende wedstrijd: <code>{esc(settings.hashtag_override)}</code>."
+        f"Eigen hashtag ingesteld: <code>{esc(settings.hashtag_override)}</code>. "
+        "Hij vervalt na het einde van deze wedstrijd."
         if settings.hashtag_override
         else "Nu is de standaard actief."
     )
@@ -495,12 +645,13 @@ def hashtag_html(request: web.Request, hashtag_error: str = "", hashtag_value: s
         '<p class="muted small">De hashtag onder elk bericht ({hashtag}) is standaard de eerste drie letters '
         "van de thuisploeg plus de eerste drie letters van de uitploeg, bijvoorbeeld "
         "<code>#vscvsw</code>. Wil je voor één wedstrijd een andere, vul die dan hier in. Hij geldt voor de "
-        "wedstrijd die nu bezig is, anders voor de eerstvolgende, en vervalt na het einde ervan.</p>"
+        "wedstrijd van je club die nu bezig is, anders voor de eerstvolgende (hieronder, als de bron hem al "
+        "kent), en vervalt na het einde ervan.</p>"
         f"{known}"
         f'<p class="small">{current}</p>'
         '<form method="post" action="/settings">'
         f'{csrf_field(request)}<input type="hidden" name="action" value="hashtag">'
-        '<label for="hashtag_input">Hashtag voor deze wedstrijd (met of zonder #)</label>'
+        '<label for="hashtag_input">Eigen hashtag (met of zonder #)</label>'
         f'<input type="text" id="hashtag_input" name="hashtag" maxlength="{MAX_HASHTAG_LENGTH + 1}" '
         'autocapitalize="none" autocorrect="off" spellcheck="false" autocomplete="off" '
         f'placeholder="#vscvsw" value="{esc(value)}">'
@@ -512,82 +663,141 @@ def hashtag_html(request: web.Request, hashtag_error: str = "", hashtag_value: s
     )
 
 
-def source_html(request: web.Request, error: str = "") -> str:
-    """Blok Bron: kies welke bron de wedstrijdinformatie levert (uit het register)."""
-    settings: Settings = request.app["settings"]
+def source_html(
+    request: web.Request, error: str = "", team: dict | None = None, chosen: str | None = None
+) -> str:
+    """Blok Bron en club: bron en club in één formulier, samen opgeslagen.
+
+    Bij het scorebord ligt de club vast; bij Voetbalnederland kies je hem met een
+    live-zoekveld (TEAM_JS). Zonder JavaScript zoekt de knop Zoeken via de server.
+    """
     manager = request.app.get("sources")
     if manager is None:
         return '<p class="muted">Er zijn geen bronnen beschikbaar.</p>'
+    chosen = chosen if chosen in manager.sources else manager.active_id
     radios = "".join(
         f'<label class="choice choice-source"><input type="radio" name="source" value="{esc(source_id)}"'
-        f'{" checked" if manager.active_id == source_id else ""}>'
+        f'{" checked" if chosen == source_id else ""}>'
         f'<span><strong>{esc(source.label)}</strong><br><span class="muted small">{esc(source.description)}</span>'
         "</span></label>"
         for source_id, source in manager.sources.items()
     )
+    clubs = "".join(
+        f'<div class="club" data-source="{esc(source_id)}"{"" if source_id == chosen else " hidden"}>'
+        + (team_picker_html(request, **(team or {})) if source_id == "voetbalnederland" else fixed_club_html(source))
+        + "</div>"
+        for source_id, source in manager.sources.items()
+    )
     return (
-        '<p class="muted small">Er draait altijd één bron. Je club is bij het scorebord de thuisploeg, '
-        "en bij Voetbalnederland het team dat je in dat blok kiest.</p>"
-        '<form method="post" action="/settings">'
+        '<form method="post" action="/settings" id="source-form">'
         f'{csrf_field(request)}<input type="hidden" name="action" value="source">{radios}'
+        f"<h3>Je club</h3>{clubs}"
         f'{message_box(error, "error")}'
-        '<div class="row"><button type="submit">Bron opslaan</button></div></form>'
+        '<div class="row"><button type="submit" name="save" value="1">Opslaan</button></div></form>'
     )
 
 
-def voetbalnederland_html(
-    request: web.Request,
-    error: str = "",
-    error_field: str = "",
-    results: list[dict] | None = None,
-    query: str = "",
+def fixed_club_html(source) -> str:
+    club = source.club()
+    shown = f"<strong>{esc(club)}</strong>" if club else f'<span class="muted">{esc(source.club_hint)}</span>'
+    return f'<p>{shown}</p><p class="muted small">Bij {esc(source.label)} ligt de club vast: de thuisploeg.</p>'
+
+
+TEAM_RESULTS = 8  # zoveel clubs tonen, om het blok kort te houden
+
+
+def team_label(club: dict) -> tuple[str, str]:
+    detail = " \u00b7 ".join(str(v) for v in (club.get("speeldag"), club.get("competitionName")) if v)
+    return str(club.get("name", "")), detail
+
+
+def team_option(team_id: object, name: str, detail: str = "", checked: bool = False) -> str:
+    return (
+        f'<label class="choice team-pick"><input type="radio" name="team" value="{esc(team_id)}:{esc(name)}"'
+        f'{" checked" if checked else ""}><span><strong>{esc(name)}</strong>'
+        f'{f"<br><span class=muted>{esc(detail)}</span>" if detail else ""}</span></label>'
+    )
+
+
+def team_picker_html(
+    request: web.Request, error: str = "", results: list[dict] | None = None, query: str = ""
 ) -> str:
-    """Blok Voetbalnederland: team, clubnaam, interval en het adres van de API."""
+    """Club bij Voetbalnederland: de huidige club (gekozen) en zoekresultaten als keuzes."""
+    settings: Settings = request.app["settings"]
+    current = (
+        team_option(settings.team_id, settings.team_name or str(settings.team_id), checked=True)
+        if settings.team_id else '<p class="muted small" id="team-none">Nog geen club gekozen.</p>'
+    )
+    found = "".join(
+        team_option(club.get("id", ""), *team_label(club))
+        for club in (results or [])[:TEAM_RESULTS]
+        if str(club.get("id")) != str(settings.team_id)
+    )
+    if results is not None and not results:
+        found = '<p class="muted small">Geen clubs gevonden.</p>'
+    return (
+        f'<div id="team-current">{current}</div>'
+        f'<label for="team_q">{"Andere club zoeken" if settings.team_id else "Zoek je club"}</label>'
+        f'<input type="search" id="team_q" name="q" value="{esc(query)}" maxlength="60" '
+        'autocomplete="off" placeholder="Typ een clubnaam, bv. VSCO" enterkeyhint="search">'
+        f'{message_box(error, "error")}'
+        f'<div id="team-results" class="team-results" aria-live="polite">{found}</div>'
+        '<div class="row" id="team-search-row"><button type="submit" name="search" value="1" '
+        'class="secondary" formnovalidate>Zoeken</button></div>'
+    )
+
+
+# Bron wisselen toont direct het clubdeel van die bron (opslaan gebeurt met Opslaan).
+# Live zoeken: resultaten als keuzes; Enter in het zoekveld zoekt in plaats van op te slaan.
+TEAM_JS = (
+    "(function(){var f=document.getElementById('source-form');if(!f)return;"
+    "function sync(){var c=f.querySelector('input[name=source]:checked');"
+    "f.querySelectorAll('.club').forEach(function(d){d.hidden=!c||d.dataset.source!==c.value;});}"
+    "f.querySelectorAll('input[name=source]').forEach(function(r){r.addEventListener('change',sync);});sync();"
+    "var q=document.getElementById('team_q');if(!q)return;"
+    "var box=document.getElementById('team-results'),row=document.getElementById('team-search-row'),"
+    "t=null,ctl=null,n=0;if(row)row.hidden=true;"
+    "function note(text){box.textContent='';var p=document.createElement('p');p.className='muted small';"
+    "p.textContent=text;box.appendChild(p);}"
+    "function show(list){box.textContent='';var cur=f.querySelector('#team-current input');"
+    "list=list.filter(function(c){return !cur||cur.value.split(':')[0]!==String(c.id);});"
+    "if(!list.length){note('Geen andere clubs gevonden.');return;}"
+    "list.forEach(function(c){var l=document.createElement('label');l.className='choice team-pick';"
+    "var i=document.createElement('input');i.type='radio';i.name='team';i.value=c.id+':'+c.name;"
+    "var s=document.createElement('span'),b=document.createElement('strong');b.textContent=c.name;s.appendChild(b);"
+    "if(c.detail){s.appendChild(document.createElement('br'));var d=document.createElement('span');"
+    "d.className='muted';d.textContent=c.detail;s.appendChild(d);}"
+    "l.appendChild(i);l.appendChild(s);box.appendChild(l);});}"
+    "function search(){var v=q.value.trim(),me=++n;if(ctl)ctl.abort();"
+    "if(v.length<2){box.textContent='';return;}var c=ctl=new AbortController();"
+    "var timer=setTimeout(function(){c.abort();},8000);"
+    "fetch('/teams?q='+encodeURIComponent(v),{signal:c.signal,credentials:'same-origin'})"
+    ".then(function(r){if(!r.ok)throw new Error();return r.json();})"
+    ".then(function(list){if(me===n)show(list);})"
+    ".catch(function(){if(me===n)note('Zoeken lukt nu niet.');})"
+    ".finally(function(){clearTimeout(timer);});}"
+    "q.addEventListener('input',function(){clearTimeout(t);t=setTimeout(search,300);});"
+    "q.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();clearTimeout(t);search();}});"
+    "})();"
+)
+
+
+def voetbalnederland_html(request: web.Request, error: str = "", error_field: str = "") -> str:
+    """Blok Voetbalnederland: clubnaam, interval en het adres van de API (de club staat onder Bron)."""
     settings: Settings = request.app["settings"]
 
-    def err(name: str) -> str:
-        return message_box(error, "error") if error and error_field == name else ""
-
     def form(action: str, inner: str, button: str) -> str:
+        err = message_box(error, "error") if error and error_field == action else ""
         return (
             f'<form method="post" action="/settings">{csrf_field(request)}'
-            f'<input type="hidden" name="action" value="{action}">{inner}{err(action)}'
+            f'<input type="hidden" name="action" value="{action}">{inner}{err}'
             f'<div class="row"><button type="submit">{esc(button)}</button></div></form>'
         )
 
-    team = (
-        f"<strong>{esc(settings.team_name or settings.team_id)}</strong> (id {esc(settings.team_id)})"
-        if settings.team_id else "nog geen team gekozen"
-    )
-    found = ""
-    if results is not None:
-        if not results:
-            found = '<p class="muted small">Geen teams gevonden.</p>'
-        for club in results:
-            label = " \u00b7 ".join(
-                str(v) for v in (club.get("name"), club.get("speeldag"), club.get("competitionName")) if v
-            )
-            found += (
-                '<form method="post" action="/settings" class="result">'
-                f'{csrf_field(request)}<input type="hidden" name="action" value="team">'
-                f'<input type="hidden" name="team_id" value="{esc(club.get("id", ""))}">'
-                f'<input type="hidden" name="team_name" value="{esc(club.get("name", ""))}">'
-                f'<span>{esc(label)}</span><button type="submit" class="secondary">Kies</button></form>'
-            )
     return (
-        '<p class="muted small">Volgt de wedstrijd van vandaag van het gekozen team, thuis of uit '
+        '<p class="muted small">Volgt de wedstrijd van vandaag van je club (onder Bron), thuis of uit '
         f"(elke {esc(settings.poll_seconds)} seconden, vanaf een kwartier voor de aftrap). Begin, rust, "
-        "tweede helft en einde hebben geen minuut; doelpunten wel. Alleen in gebruik als dit de "
-        "gekozen bron is.</p>"
-        + f"<h3>Team</h3><p>{team}</p>"
-        + '<form method="post" action="/settings">'
-        f'{csrf_field(request)}<input type="hidden" name="action" value="team_search">'
-        '<label for="team_q">Zoek je team</label>'
-        f'<input type="text" id="team_q" name="q" value="{esc(query)}" maxlength="60" required '
-        'autocomplete="off" placeholder="bv. VSCO">'
-        f'{err("team_search")}{err("team")}'
-        '<div class="row"><button type="submit" class="secondary">Zoeken</button></div></form>'
-        f"{found}"
+        "tweede helft en einde hebben geen minuut; doelpunten wel.</p>"
         + "<h3>Clubnaam in berichten</h3>"
         + form(
             "club_name",
@@ -629,11 +839,36 @@ def logging_html(request: web.Request) -> str:
     )
 
 
+# Instellingenblok per bron: bron-id -> (blok-id, titel, inhoud(request, **fouten)).
+# Alleen het blok van de gekozen bron staat op de pagina (of een blok met een fout of
+# melding, bv. na een POST van een script).
+def scoreboard_panel(request: web.Request, connection: dict | None = None, goal_wait: dict | None = None) -> str:
+    return (
+        connection_html(request, **(connection or {}))
+        + "<h3>Wachten op de doelpuntmaker</h3>"
+        + goal_wait_html(request, **(goal_wait or {}))
+    )
+
+
+SOURCE_PANELS: dict[str, tuple[str, str, Callable[..., str]]] = {
+    "scoreboard": ("scorebord", "Scorebord", scoreboard_panel),
+    "voetbalnederland": ("voetbalnederland", "Voetbalnederland", voetbalnederland_html),
+}
+
+
+def active_source_id(app: web.Application) -> str:
+    manager = app.get("sources")
+    if manager is not None:
+        return manager.active_id
+    chosen = app["settings"].source
+    return chosen if chosen in SOURCE_PANELS else "scoreboard"
+
+
 # Welk blok open moet na opslaan (via ?msg=...).
 BLOCK_FOR_MESSAGE = {
     "source": "bron",
     "url": "scorebord", "token": "scorebord", "goal_wait": "scorebord",
-    "team": "voetbalnederland", "club_name": "voetbalnederland",
+    "team": "bron", "club_name": "voetbalnederland",
     "poll": "voetbalnederland", "voetbalnederland_url": "voetbalnederland",
     "hashtag": "hashtag", "hashtag_reset": "hashtag",
     "templates": "sjablonen", "reset": "sjablonen",
@@ -656,42 +891,81 @@ def app_page(
     hashtag: dict | None = None,
     source: dict | None = None,
 ) -> web.Response:
-    """App-instellingen (alleen beheerder): uitklapbare blokken, elk met een eigen opslaanknop."""
-    settings: Settings = request.app["settings"]
-    open_block = open_block or BLOCK_FOR_MESSAGE.get(request.query.get("msg", ""))
-    values, errors = templates or (settings.templates, {})
+    """Connectie (alleen beheerder): uitklapbare blokken, elk met een eigen opslaanknop.
 
-    def block(block_id: str, title: str, content: str) -> str:
-        is_open = " open" if block_id == open_block else ""
-        return (
-            f'<details class="block" id="{block_id}"{is_open}><summary>{esc(title)}</summary>'
-            f'<div class="block-body">{content}</div></details>'
-        )
+    Fouten in de blokken Hashtag en Sjablonen tonen de pagina Sjablonen."""
+    if open_block in TEMPLATE_BLOCKS:
+        return templates_page(request, templates=templates, hashtag=hashtag, status=status)
+    # Zonder melding staat het blok Bron open: dat is de belangrijkste keuze.
+    open_block = open_block or BLOCK_FOR_MESSAGE.get(request.query.get("msg", ""), "bron")
+    block = block_maker(open_block)
+
+    panel_args = {
+        "scoreboard": {"connection": connection, "goal_wait": goal_wait},
+        "voetbalnederland": voetbalnederland or {},
+    }
+    active = active_source_id(request.app)
+    panels = ""
+    for source_id, (block_id, title, render) in SOURCE_PANELS.items():
+        if source_id == active or block_id == open_block:
+            panels += block(block_id, title, render(request, **panel_args.get(source_id, {})))
 
     body = (
         f"{flash(request)}"
         '<p class="note">Deze instellingen gelden voor iedereen die de app gebruikt.</p>'
+        + block("bron", "Bron en club", source_html(request, **(source or {})))
+        + panels
         + block("status", "Status", f'<div id="live-table">{status_table_html(request.app)}</div>')
-        + block("bron", "Bron", source_html(request, **(source or {})))
-        + block(
-            "scorebord", "Scorebord",
-            connection_html(request, **(connection or {}))
-            + "<h3>Wachten op de doelpuntmaker</h3>"
-            + goal_wait_html(request, **(goal_wait or {})),
-        )
-        + block(
-            "voetbalnederland", "Voetbalnederland",
-            voetbalnederland_html(request, **(voetbalnederland or {})),
-        )
-        + block("hashtag", "Hashtag", hashtag_html(request, **(hashtag or {})))
-        + block("sjablonen", "Sjablonen", templates_form(request, values, errors))
         + block("logging", "Logging", logging_html(request))
     )
     response = page(
-        request, "App", "/app", body, script=LIVE_JS + REVEAL_JS + OPEN_HASH_JS, aside=led_html(request)
+        request, "Connectie", "/app", body, script=LIVE_JS + REVEAL_JS + OPEN_HASH_JS + TEAM_JS, aside=led_html(request)
     )
     response.set_status(status)
     return response
+
+
+def block_maker(open_block: str | None):
+    def block(block_id: str, title: str, content: str, is_open: bool = False) -> str:
+        opened = " open" if is_open or block_id == open_block else ""
+        return (
+            f'<details class="block" id="{block_id}"{opened}><summary>{esc(title)}</summary>'
+            f'<div class="block-body">{content}</div></details>'
+        )
+
+    return block
+
+
+# Blokken op de pagina Sjablonen (de rest staat op Connectie).
+TEMPLATE_BLOCKS = ("hashtag", "sjablonen")
+
+
+def page_for_block(block_id: str) -> str:
+    return "/sjablonen" if block_id in TEMPLATE_BLOCKS else "/app"
+
+
+def templates_page(
+    request: web.Request,
+    templates: tuple[dict, dict] | None = None,
+    hashtag: dict | None = None,
+    status: int = 200,
+) -> web.Response:
+    """Sjablonen (alleen beheerder): de hashtag en de teksten van alle berichten."""
+    settings: Settings = request.app["settings"]
+    values, errors = templates or (settings.templates, {})
+    block = block_maker(None)
+    body = (
+        f"{flash(request)}"
+        + block("hashtag", "Hashtag", hashtag_html(request, **(hashtag or {})), is_open=True)
+        + block("sjablonen", "Berichtteksten", templates_form(request, values, errors), is_open=True)
+    )
+    response = page(request, "Sjablonen", "/sjablonen", body, script=LIVE_JS + OPEN_HASH_JS, aside=led_html(request))
+    response.set_status(status)
+    return response
+
+
+async def templates_view(request: web.Request) -> web.Response:
+    return templates_page(request)
 
 
 async def app_view(request: web.Request) -> web.Response:
@@ -719,17 +993,19 @@ async def settings_post(request: web.Request) -> web.Response:
         elif action == "goal_wait":
             settings.set_goal_wait(form.get("goal_wait", ""))
             logger.info("Wachttijd op de doelpuntmaker gewijzigd naar %s seconden", settings.goal_wait_seconds)
+        elif action == "source" and form.get("search"):
+            # Zoeken zonder JavaScript: gekozen bron blijft staan, nog niets opgeslagen.
+            return await team_search(request, str(form.get("q", "")), chosen=str(form.get("source", "")))
         elif action == "source":
-            manager = request.app.get("sources")
-            chosen = str(form.get("source", ""))
-            if manager is None or chosen not in manager.sources:
-                raise ValueError("Kies een van de bronnen.")
-            settings.set_source(chosen)
-            logger.info("Bron gewijzigd naar %s", manager.sources[chosen].label)
+            save_source_and_club(request, form)
         elif action == "team_search":
             return await team_search(request, str(form.get("q", "")))
         elif action == "team":
-            settings.set_team(form.get("team_id", ""), str(form.get("team_name", "")))
+            if "team" in form:  # keuzelijst: "id:naam"
+                team_id, _, name = str(form.get("team", "")).partition(":")
+            else:
+                team_id, name = form.get("team_id", ""), str(form.get("team_name", ""))
+            settings.set_team(team_id, name)
             logger.info("Team voor Voetbalnederland gewijzigd naar %s", settings.team_name or settings.team_id)
         elif action == "club_name":
             settings.set_club_name(str(form.get("club_name", "")))
@@ -748,8 +1024,11 @@ async def settings_post(request: web.Request) -> web.Response:
             raise ValueError("Onbekende actie.")
     except ValueError as error:
         if action == "source":
-            return app_page(request, "bron", source={"error": str(error)}, status=400)
-        if action in ("team", "club_name", "poll", "voetbalnederland_url"):
+            failed = {"error": str(error), "chosen": str(form.get("source", ""))}
+            return app_page(request, "bron", source=failed, status=400)
+        if action == "team":
+            return app_page(request, "bron", source={"team": {"error": str(error)}}, status=400)
+        if action in ("club_name", "poll", "voetbalnederland_url"):
             failed = {"error": str(error), "error_field": action}
             return app_page(request, "voetbalnederland", voetbalnederland=failed, status=400)
         if action == "token":
@@ -762,26 +1041,73 @@ async def settings_post(request: web.Request) -> web.Response:
             return app_page(request, "hashtag", hashtag=failed, status=400)
         url = {"url_error": str(error), "url_value": str(form.get("url", ""))}
         return app_page(request, "scorebord", connection=url, status=400)
-    raise web.HTTPSeeOther(f"/app?msg={action}#{BLOCK_FOR_MESSAGE[action]}")
+    block_id = BLOCK_FOR_MESSAGE[action]
+    raise web.HTTPSeeOther(f"{page_for_block(block_id)}?msg={action}#{block_id}")
 
 
-async def team_search(request: web.Request, query: str) -> web.Response:
-    """Zoek een team bij Voetbalnederland en toon de resultaten om er één te kiezen."""
+async def find_teams(request: web.Request, query: str) -> list[dict]:
+    """Zoek clubs bij Voetbalnederland. ValueError bij een te korte zoekterm of zonder bron."""
     query = " ".join(query.split())[:60]
     manager = request.app.get("sources")
     source = manager.sources.get("voetbalnederland") if manager is not None else None
     if len(query) < 2:
-        failed = {"error": "Vul minstens 2 letters in.", "error_field": "team_search", "query": query}
-        return app_page(request, "voetbalnederland", voetbalnederland=failed, status=400)
+        raise ValueError("Vul minstens 2 letters in.")
     if source is None:
-        failed = {"error": "Voetbalnederland is niet beschikbaar.", "error_field": "team_search", "query": query}
-        return app_page(request, "voetbalnederland", voetbalnederland=failed, status=400)
+        raise ValueError("Voetbalnederland is niet beschikbaar.")
+    return (await source.client.search_clubs(query))[:TEAM_RESULTS]
+
+
+def save_source_and_club(request: web.Request, form) -> None:
+    """Bron en club samen opslaan. Bij Voetbalnederland is een club verplicht."""
+    settings: Settings = request.app["settings"]
+    manager = request.app.get("sources")
+    chosen = str(form.get("source", ""))
+    if manager is None or chosen not in manager.sources:
+        raise ValueError("Kies een van de bronnen.")
+    team = str(form.get("team", "") or "")
+    if chosen == "voetbalnederland":
+        if team:
+            team_id, _, name = team.partition(":")
+            settings.set_team(team_id, name)
+        elif not settings.team_id:
+            raise ValueError("Kies je club bij Voetbalnederland.")
+    changed = chosen != settings.source
+    if changed:  # alleen bij een wissel de bron herstarten
+        settings.set_source(chosen)
+    logger.info(
+        "Bron %s: %s, club %s", "gewijzigd" if changed else "opgeslagen",
+        manager.sources[chosen].label, manager.sources[chosen].club() or "-",
+    )
+
+
+async def team_search(request: web.Request, query: str, chosen: str | None = None) -> web.Response:
+    """Zoeken zonder JavaScript: de pagina met de resultaten in het blok Bron en club."""
+    def page_with(team: dict, status: int = 200) -> web.Response:
+        source = {"team": {"query": query, **team}, "chosen": chosen or "voetbalnederland"}
+        return app_page(request, "bron", source=source, status=status)
+
     try:
-        results = await source.client.search_clubs(query)
+        results = await find_teams(request, query)
+    except ValueError as error:
+        return page_with({"error": str(error)}, 400)
     except VoetbalnederlandError as error:
-        failed = {"error": str(error), "error_field": "team_search", "query": query}
-        return app_page(request, "voetbalnederland", voetbalnederland=failed, status=502)
-    return app_page(request, "voetbalnederland", voetbalnederland={"results": results[:20], "query": query})
+        return page_with({"error": str(error)}, 502)
+    return page_with({"results": results})
+
+
+async def teams_json(request: web.Request) -> web.Response:
+    """Live zoeken: clubs als JSON ([{id, name, detail}]); fouten als lege lijst met een status."""
+    try:
+        results = await find_teams(request, request.query.get("q", ""))
+    except ValueError:
+        return web.json_response([], status=400)
+    except VoetbalnederlandError:
+        return web.json_response([], status=502)
+    out = []
+    for club in results:
+        name, detail = team_label(club)
+        out.append({"id": club.get("id"), "name": name, "detail": detail})
+    return web.json_response(out)
 
 
 def templates_form(request: web.Request, values: dict[str, str], errors: dict[str, str]) -> str:
@@ -826,13 +1152,13 @@ async def templates_post(request: web.Request) -> web.Response:
         return app_page(request, "sjablonen", templates=(submitted, errors), status=400)
     settings.set_templates(submitted)
     logger.info("Berichtsjablonen gewijzigd via de webomgeving")
-    raise web.HTTPSeeOther("/app?msg=templates#sjablonen")
+    raise web.HTTPSeeOther("/sjablonen?msg=templates#sjablonen")
 
 
 async def templates_reset(request: web.Request) -> web.Response:
     request.app["settings"].reset_templates()
     logger.info("Berichtsjablonen hersteld naar de standaard via de webomgeving")
-    raise web.HTTPSeeOther("/app?msg=reset#sjablonen")
+    raise web.HTTPSeeOther("/sjablonen?msg=reset#sjablonen")
 
 
 def post_url(text: str) -> str:
@@ -1135,7 +1461,7 @@ self.addEventListener('push', (event) => {
   try { data = event.data ? event.data.json() : {}; } catch (e) { data = {body: event.data ? event.data.text() : ''}; }
   event.waitUntil(self.registration.showNotification(data.title || 'Matchshare', {
     body: data.body || '', tag: data.tag || undefined,
-    icon: data.icon || '/static/icon-ball.png', badge: data.badge || '/static/badge-ball.png',
+    icon: data.icon || '/static/icon-192.png', badge: data.badge || '/static/badge-logo.png',
     data: {url: data.url || '/'},
   }));
 });
@@ -1166,7 +1492,7 @@ async def manifest(request: web.Request) -> web.Response:
         "icons": [
             {"src": "/static/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
             {"src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
-            {"src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"},
+            {"src": "/static/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"},
         ],
     }
     return web.json_response(
@@ -1432,19 +1758,24 @@ def create_web_app(
             web.get("/login", login_page),
             web.post("/login", login_post),
             web.post("/logout", logout_post),
+            web.post("/theme", theme_post),
             web.get("/manifest.webmanifest", manifest),
             web.get("/sw.js", service_worker),
             web.static("/static", STATIC_DIR, append_version=False),
             web.get("/", messages_page),
-            web.get("/me", me_page),
+            web.get("/pushmeldingen", push_page),
+            web.get("/account", account_page),
+            web.get("/me", redirect_to("/pushmeldingen")),  # oud adres
             web.get("/app", app_view),
+            web.get("/sjablonen", templates_view),
             web.post("/settings", settings_post),
+            web.get("/teams", teams_json),
             web.post("/templates", templates_post),
             web.post("/templates/reset", templates_reset),
             # Oude adressen sturen door naar het juiste blok.
             web.get("/status", redirect_to("/app#status")),
             web.get("/settings", redirect_to("/app#scorebord")),
-            web.get("/templates", redirect_to("/app#sjablonen")),
+            web.get("/templates", redirect_to("/sjablonen")),
             web.get("/logs", redirect_to("/app#logging")),
             web.get("/logs/data", logs_data),
             web.get("/photo/{photo_id:[0-9a-f]{24}}", photo),

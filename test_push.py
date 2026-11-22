@@ -240,19 +240,17 @@ class RealEncryptionTests(unittest.IsolatedAsyncioTestCase):
 
 
 class NotificationIconTests(unittest.IsolatedAsyncioTestCase):
-    def test_whistle_for_match_moments_and_ball_for_goals(self):
+    def test_every_notification_shows_the_logo(self):
         from push import notification_icons
 
-        for kind in ("start", "rest", "second_half", "end_win", "end_other"):
-            self.assertEqual(notification_icons(kind), ("/static/icon-whistle.png", "/static/badge-whistle.png"))
-        for kind in ("goal_home", "goal_home_no_scorer", "goal_away", None):
-            self.assertEqual(notification_icons(kind), ("/static/icon-ball.png", "/static/badge-ball.png"))
+        for kind in ("start", "rest", "second_half", "end_win", "goal_home", "goal_away", None):
+            self.assertEqual(notification_icons(kind), ("/static/icon-192.png", "/static/badge-logo.png"))
 
     def test_icon_files_exist_and_badges_are_transparent(self):
         import struct
 
         static = Path(__file__).with_name("static")
-        for name in ("icon-whistle.png", "icon-ball.png", "badge-whistle.png", "badge-ball.png"):
+        for name in ("icon-192.png", "badge-logo.png"):
             data = (static / name).read_bytes()
             self.assertEqual(data[:8], b"\x89PNG\r\n\x1a\n", name)
             color_type = data[25]
@@ -262,7 +260,7 @@ class NotificationIconTests(unittest.IsolatedAsyncioTestCase):
                 width = struct.unpack(">I", data[16:20])[0]
                 self.assertGreaterEqual(width, 72, name)
 
-    async def test_payload_carries_the_icon_for_the_kind_of_message(self):
+    async def test_payload_carries_the_logo(self):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
         root = Path(folder.name)
@@ -271,9 +269,8 @@ class NotificationIconTests(unittest.IsolatedAsyncioTestCase):
         store.add(sub(1))
         await sender.send("'1 De wedstrijd is begonnen!", "abc123def456", "start")
         await sender.send("'12 DOELPUNT", "abc123def457", "goal_home")
-        self.assertEqual(fake.sent[0][1]["icon"], "/static/icon-whistle.png")
-        self.assertEqual(fake.sent[0][1]["badge"], "/static/badge-whistle.png")
-        self.assertEqual(fake.sent[1][1]["badge"], "/static/badge-ball.png")
+        for sent in fake.sent:
+            self.assertEqual((sent[1]["icon"], sent[1]["badge"]), ("/static/icon-192.png", "/static/badge-logo.png"))
 
 
 class ConnectorNotifyTests(unittest.TestCase):
@@ -396,8 +393,8 @@ class PushWebTests(AioHTTPTestCase):
         gone = await self.client.get("/share/0123456789ab", headers=AUTH, allow_redirects=False)
         self.assertEqual((gone.status, gone.headers["Location"]), (303, "/"))
 
-    async def test_my_settings_page_has_the_notifications_card(self):
-        body = await (await self.client.get("/me", headers=AUTH)).text()
+    async def test_push_page_has_the_notifications_card(self):
+        body = await (await self.client.get("/pushmeldingen", headers=AUTH)).text()
         self.assertIn('id="push-toggle"', body)
         self.assertIn(f'data-csrf="{self.app["csrf"]}"', body)
         self.assertIn("pushManager.subscribe", body)
@@ -419,9 +416,9 @@ class NoPushWebTests(AioHTTPTestCase):
         return create_web_app(settings, ConnectionState(), root / "a", root / "r", "admin", "wachtwoord")
 
     async def test_without_push_there_is_no_card_and_no_key(self):
-        body = await (await self.client.get("/me", headers=AUTH)).text()
+        body = await (await self.client.get("/pushmeldingen", headers=AUTH)).text()
         self.assertNotIn('id="push-toggle"', body)
-        self.assertIn("Meldingen zijn niet ingesteld", body)
+        self.assertIn("Pushmeldingen zijn niet ingesteld", body)
         self.assertEqual((await self.client.get("/push/key", headers=AUTH)).status, 404)
 
 

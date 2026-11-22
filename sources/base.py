@@ -1,7 +1,7 @@
 """Gemeenschappelijke basis voor bronnen van wedstrijdinformatie.
 
 Een bron levert wedstrijdberichten (begin, doelpunten, rust, einde ...) aan de
-`Publisher`. Er draait altijd precies één bron: de bron die onder App is gekozen.
+`Publisher`. Er draait altijd precies één bron: de bron die onder Connectie is gekozen.
 Een nieuwe bron is een subklasse van `Source` die in `sources/__init__.py` wordt
 geregistreerd (zie daar).
 """
@@ -63,8 +63,15 @@ class Source:
         return "warn", "starten"
 
     def status_rows(self) -> list[StatusRow]:
-        """Regels voor de statustabel onder App > Status."""
+        """Regels voor de statustabel onder Connectie > Status."""
         return []
+
+    def club(self) -> str | None:
+        """Naam van je club bij deze bron, of None als die (nog) niet bekend is."""
+        return None
+
+    # Uitleg als club() nog niets weet, bv. "kies een team".
+    club_hint = "nog onbekend"
 
     @property
     def match(self) -> dict | None:

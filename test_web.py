@@ -51,7 +51,7 @@ class WebTests(AioHTTPTestCase):
     async def test_pages_render_and_only_the_connection_page_contains_the_token(self):
         self.state.set("verbonden", "ok")
         self.state.record_error("iets misgegaan")
-        for path in ("/", "/me", "/app"):
+        for path in ("/", "/pushmeldingen", "/account", "/app"):
             resp = await self.client.get(path, headers=AUTH)
             body = await resp.text()
             self.assertEqual(resp.status, 200, path)
@@ -61,10 +61,10 @@ class WebTests(AioHTTPTestCase):
                 self.assertNotIn("supergeheim", body, path)
             self.assertIn("default-src 'none'", resp.headers["Content-Security-Policy"])
             self.assertEqual(resp.headers["Cache-Control"], "no-store")
-        for old, block in (("/status", "status"), ("/settings", "scorebord"),
-                           ("/templates", "sjablonen"), ("/logs", "logging")):
+        for old, target in (("/status", "/app#status"), ("/settings", "/app#scorebord"),
+                            ("/templates", "/sjablonen"), ("/logs", "/app#logging")):
             resp = await self.client.get(old, headers=AUTH, allow_redirects=False)
-            self.assertEqual((resp.status, resp.headers["Location"]), (303, f"/app#{block}"), old)
+            self.assertEqual((resp.status, resp.headers["Location"]), (303, target), old)
         status = await (await self.client.get("/app", headers=AUTH)).text()
         self.assertIn("verbonden", status)
         self.assertIn("iets misgegaan", status)
@@ -147,7 +147,7 @@ class WebTests(AioHTTPTestCase):
         self.assertEqual(self.settings.goal_wait_seconds, 35)
 
     async def test_hashtag_block_explains_the_default_and_saves_an_own_hashtag(self):
-        page = await (await self.client.get("/app", headers=AUTH)).text()
+        page = await (await self.client.get("/sjablonen", headers=AUTH)).text()
         self.assertIn('id="hashtag"', page)
         self.assertIn('name="hashtag"', page)
         self.assertIn("#vscvsw", page)  # het voorbeeld van de standaard
@@ -183,7 +183,7 @@ class WebTests(AioHTTPTestCase):
 
     async def test_the_hashtag_is_escaped_in_the_page(self):
         self.settings.hashtag_override = "<b>x</b>"  # bv. uit een handmatig aangepast bestand
-        page = await (await self.client.get("/app", headers=AUTH)).text()
+        page = await (await self.client.get("/sjablonen", headers=AUTH)).text()
         self.assertNotIn("<b>x</b>", page)
 
     async def test_invalid_url_is_refused_with_message(self):
@@ -209,7 +209,7 @@ class WebTests(AioHTTPTestCase):
             if part.strip().startswith("script-src")
         ][0]
         self.assertNotIn("unsafe", script_src)
-        other = await self.client.get("/me", headers=AUTH)
+        other = await self.client.get("/account", headers=AUTH)
         self.assertNotIn("querySelectorAll('.reveal')", await other.text())  # oog-script alleen op Verbinding
 
     async def test_token_with_markup_is_escaped_in_the_form(self):
@@ -609,16 +609,57 @@ class RoleTests(AioHTTPTestCase):
         resp = await self.login("deler", "deelwachtwoord")
         self.assertEqual(resp.status, 303)
         home = await (await self.client.get("/")).text()
-        self.assertIn('href="/me"', home)
+        # Accountmenu (hamburger) met Pushmeldingen en Account, los van het hoofdmenu.
+        self.assertIn('<details class="app-menu" id="menu">', home)
+        self.assertIn('href="/pushmeldingen">Pushmeldingen</a>', home)
+        self.assertIn('href="/account">Account</a>', home)
         self.assertNotIn('href="/app"', home)
         self.assertNotIn('href="/app#status"', home)  # lampje is voor een gebruiker geen link
-        me = await (await self.client.get("/me")).text()
+        me = await (await self.client.get("/account")).text()
         self.assertIn("Ingelogd als <strong>gebruiker</strong>", me)
+        self.assertIn('class="close"', me)
+        # Zonder Connectie en Sjablonen: geen scheiding boven het account.
+        self.assertIn('<nav class="menu-list" aria-label="Menu"><a href="/pushmeldingen">', home)
+        old = await self.client.get("/me", allow_redirects=False)
+        self.assertEqual((old.status, old.headers["Location"]), (303, "/pushmeldingen"))
         self.assertNotIn("supergeheim", home + me)
+
+    async def test_theme_follows_the_system_until_a_user_chooses_one(self):
+        await self.login("deler", "deelwachtwoord")  # ook een gebruiker mag dit kiezen
+        home = await (await self.client.get("/")).text()
+        self.assertIn('<html lang="nl"><head>', home)  # Systeem: geen vaste keuze
+        self.assertIn("@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#14171b", home)
+        self.assertIn(":root[data-theme=dark]{--bg:#14171b", home)
+        account = await (await self.client.get("/account")).text()
+        self.assertIn('name="theme" value="system" checked>Systeem', account)
+        for theme in ("dark", "light"):
+            resp = await self.client.post("/theme", data={"csrf": self.app["csrf"], "theme": theme},
+                                          allow_redirects=False)
+            self.assertEqual((resp.status, resp.headers["Location"]), (303, "/account?msg=theme"))
+            page = await (await self.client.get("/account?msg=theme")).text()
+            self.assertIn(f'<html lang="nl" data-theme="{theme}">', page)
+            self.assertIn(f'name="theme" value="{theme}" checked>', page)
+            self.assertIn("Weergave opgeslagen", page)
+        await self.client.post("/theme", data={"csrf": self.app["csrf"], "theme": "system"})
+        self.assertIn('<html lang="nl"><head>', await (await self.client.get("/")).text())
+
+    async def test_theme_needs_a_valid_choice_and_csrf(self):
+        await self.login("deler", "deelwachtwoord")
+        bad = await self.client.post("/theme", data={"csrf": self.app["csrf"], "theme": "paars"})
+        self.assertEqual(bad.status, 400)
+        no_csrf = await self.client.post("/theme", data={"theme": "dark"})
+        self.assertEqual(no_csrf.status, 403)
+        self.assertIn('<html lang="nl"><head>', await (await self.client.get("/")).text())
+
+    async def test_login_page_has_no_menus(self):
+        body = await (await self.client.get("/login")).text()
+        self.assertNotIn('id="menu"', body)
+        self.assertNotIn("app-footer\"", body)
+        self.assertNotIn("<nav>", body)
 
     async def test_user_cannot_open_or_change_app_settings(self):
         await self.login("deler", "deelwachtwoord")
-        for path in ("/app", "/status", "/settings", "/templates", "/logs"):
+        for path in ("/app", "/sjablonen", "/status", "/settings", "/templates", "/logs"):
             page = await self.client.get(path, headers={"Accept": "text/html"}, allow_redirects=False)
             self.assertEqual((page.status, page.headers.get("Location")), (303, "/"), path)
             self.assertEqual((await self.client.get(path)).status, 403, path)
@@ -651,8 +692,38 @@ class RoleTests(AioHTTPTestCase):
     async def test_admin_sees_app_with_blocks_and_saving_returns_to_the_block(self):
         await self.login("admin", "wachtwoord")
         app_page = await (await self.client.get("/app")).text()
-        for block in ("status", "bron", "scorebord", "voetbalnederland", "hashtag", "sjablonen", "logging"):
+        for block in ("status", "bron", "scorebord", "logging"):
             self.assertIn(f'<details class="block" id="{block}"', app_page)
+        for block in ("hashtag", "sjablonen"):
+            self.assertNotIn(f'id="{block}"', app_page)
+        # Hashtag en berichtteksten staan samen op de pagina Sjablonen, allebei open.
+        templates = await (await self.client.get("/sjablonen")).text()
+        self.assertIn("<title>Sjablonen - Matchshare</title>", templates)
+        self.assertIn('<details class="block" id="hashtag" open><summary>Hashtag</summary>', templates)
+        self.assertIn('<details class="block" id="sjablonen" open><summary>Berichtteksten</summary>', templates)
+        self.assertIn('class="close"', templates)
+        resp = await self.client.post(
+            "/settings", data={"csrf": self.app["csrf"], "action": "hashtag", "hashtag": "derby"},
+            allow_redirects=False,
+        )
+        self.assertEqual(resp.headers["Location"], "/sjablonen?msg=hashtag#hashtag")
+        # Connectie is een paneel over Berichten: kruisje terug; de footer met het menu blijft.
+        self.assertIn('<body class="sheet">', app_page)
+        self.assertIn('<a href="/" class="close" aria-label="Sluiten"', app_page)
+        self.assertIn('<footer class="app-footer">', app_page)
+        self.assertIn('<a href="/app" class=active aria-current=page>Connectie</a>', app_page)
+        # Het menu staat op Berichten (de basis): de panelen, een scheiding, dan het account.
+        home = await (await self.client.get("/")).text()
+        self.assertIn('<body class="base">', home)
+        self.assertNotIn('class="close"', home)
+        # Footer: logo links (naar Berichten), naam in het midden, menu rechts.
+        self.assertIn('<footer class="app-footer"><div class="app-footer-inner"><a href="/" class="brand-logo"', home)
+        self.assertIn('<img src="/static/logo.svg"', home)
+        self.assertIn('<span class="brand-name">Matchshare</span><details class="app-menu" id="menu">', home)
+        self.assertIn('<nav class="menu-list" aria-label="Menu"><a href="/app">Connectie</a>'
+                      '<a href="/sjablonen">Sjablonen</a><hr>'
+                      '<a href="/pushmeldingen">Pushmeldingen</a><a href="/account">Account</a></nav>', home)
+        self.assertIn("<title>Connectie - Matchshare</title>", app_page)
         self.assertIn("gelden voor iedereen", app_page)
         resp = await self.client.post(
             "/settings", data={"csrf": self.app["csrf"], "action": "goal_wait", "goal_wait": "30"},
@@ -706,6 +777,25 @@ class InstallableAppTests(AioHTTPTestCase):
             icon_resp = await self.client.get(icon["src"])
             self.assertEqual(icon_resp.status, 200, icon["src"])
             self.assertEqual((await icon_resp.read())[:8], b"\x89PNG\r\n\x1a\n")
+
+    async def test_icons_have_the_size_from_the_manifest(self):
+        data = await (await self.client.get("/manifest.webmanifest")).json(content_type=None)
+        for icon in data["icons"]:
+            png = await (await self.client.get(icon["src"])).read()
+            width, height = int.from_bytes(png[16:20], "big"), int.from_bytes(png[20:24], "big")
+            self.assertEqual(f"{width}x{height}", icon["sizes"], icon["src"])
+        # Het maskable icoon is een eigen, volle versie (de inhoud binnen de veilige zone).
+        maskable = [icon["src"] for icon in data["icons"] if icon["purpose"] == "maskable"]
+        self.assertEqual(maskable, ["/static/icon-maskable-512.png"])
+
+    async def test_logo_is_an_svg_favicon(self):
+        page = await (await self.client.get("/login")).text()
+        self.assertIn('<link rel="icon" href="/static/logo.svg" type="image/svg+xml">', page)
+        resp = await self.client.get("/static/logo.svg")
+        self.assertEqual((resp.status, resp.content_type), (200, "image/svg+xml"))
+        svg = await resp.text()
+        self.assertIn("<title>Matchshare</title>", svg)
+        self.assertIn("Pictogrammers, Apache 2.0", svg)  # herkomst van de MDI-iconen
 
     async def test_service_worker_is_public_and_stores_nothing(self):
         resp = await self.client.get("/sw.js")

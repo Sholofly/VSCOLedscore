@@ -411,6 +411,7 @@ class VoetbalnederlandWebTests(AioHTTPTestCase):
         self.settings = Settings(root / "settings.json", "wss://example.test/", "JWT x")
         state = ConnectionState()
         self.source = VoetbalnederlandSource(self.settings, lambda events: None, FakeSearchClient())
+        self.settings.source = "voetbalnederland"
         sources = {"scoreboard": ScoreboardSource(self.settings, state, lambda events: None),
                    "voetbalnederland": self.source}
         self.manager = SourceManager(self.settings, sources)
@@ -428,13 +429,36 @@ class VoetbalnederlandWebTests(AioHTTPTestCase):
         self.assertIn("geen sleutel nodig", body)
 
     async def test_search_and_choose_a_team(self):
-        found = await (await self.post(action="team_search", q="VSCO")).text()
-        self.assertIn("VSCO 61 \u00b7 Zaterdag \u00b7 Oost 4C ZA", found)
-        self.assertIn('name="team_id" value="856"', found)
-        resp = await self.post(action="team", team_id="856", team_name="VSCO 61")
+        before = await (await self.client.get("/app", headers=AUTH)).text()
+        self.assertIn("Nog geen club gekozen", before)
+        # Zonder JavaScript: de knop Zoeken toont resultaten als keuzes, nog niets opgeslagen.
+        found = await (await self.post(action="source", source="voetbalnederland", q="VSCO", search="1")).text()
+        self.assertIn('<details class="block" id="bron" open>', found)
+        self.assertIn('name="team" value="856:VSCO 61"><span><strong>VSCO 61</strong>'
+                      '<br><span class=muted>Zaterdag \u00b7 Oost 4C ZA</span>', found)
+        self.assertIsNone(self.settings.team_id)
+        resp = await self.post(action="source", source="voetbalnederland", team="856:VSCO 61")
         self.assertEqual(resp.status, 200)
         self.assertEqual((self.settings.team_id, self.settings.team_name), (856, "VSCO 61"))
-        self.assertIn("Team opgeslagen", await resp.text())
+        after = await resp.text()
+        self.assertIn("Bron en club opgeslagen", after)
+        # De gekozen club staat daarna bovenaan, gekozen.
+        self.assertIn('<div id="team-current"><label class="choice team-pick"><input type="radio" '
+                      'name="team" value="856:VSCO 61" checked>', after)
+        self.assertIn("<th>Je club</th><td>VSCO 61</td>", after)
+
+    async def test_live_search_returns_clubs_as_json_for_the_admin_only(self):
+        resp = await self.client.get("/teams?q=VSCO", headers=AUTH)
+        self.assertEqual(await resp.json(), [{"id": 856, "name": "VSCO 61", "detail": "Zaterdag \u00b7 Oost 4C ZA"}])
+        self.assertEqual((await self.client.get("/teams?q=V", headers=AUTH)).status, 400)
+        user = {"Authorization": BasicAuth("deler", "dp").encode()}
+        self.assertEqual((await self.client.get("/teams?q=VSCO", headers=user)).status, 403)
+
+    async def test_an_invalid_choice_from_the_list_is_refused_in_the_source_block(self):
+        resp = await self.post(action="team", team="geen:getal")
+        self.assertEqual(resp.status, 400)
+        self.assertIn('<details class="block" id="bron" open>', await resp.text())
+        self.assertIsNone(self.settings.team_id)
 
     async def test_interval_errors_open_the_block(self):
         bad = await self.post(action="poll", poll="2")
@@ -456,10 +480,10 @@ class VoetbalnederlandWebTests(AioHTTPTestCase):
         user = {"Authorization": BasicAuth("deler", "dp").encode()}
         default_url = self.settings.voetbalnederland_url
         for data in ({"action": "voetbalnederland_url", "voetbalnederland_url": "https://evil.test"},
-                     {"action": "source", "source": "voetbalnederland"}):
+                     {"action": "source", "source": "scoreboard"}):
             resp = await self.client.post("/settings", data={"csrf": self.app["csrf"], **data}, headers=user)
             self.assertEqual(resp.status, 403)
-        self.assertEqual((self.settings.voetbalnederland_url, self.settings.source), (default_url, "scoreboard"))
+        self.assertEqual((self.settings.voetbalnederland_url, self.settings.source), (default_url, "voetbalnederland"))
 
 
 if __name__ == "__main__":

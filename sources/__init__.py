@@ -5,9 +5,11 @@ Een bron toevoegen:
    zet `id`, `label` en `description`, en implementeer `run`, `led` en
    `status_rows`. Publiceer berichten met `self.publish([...])`.
 2. Voeg hem toe in `build_sources` hieronder. Hij verschijnt dan vanzelf in de
-   keuzelijst onder App > Bron.
-3. Heeft de bron eigen instellingen, voeg dan een blok toe in `web.py`
-   (`SOURCE_PANELS`) en de instellingen in `settings.py`.
+   keuzelijst onder Connectie > Bron. Implementeer `club()` (en zo mogelijk
+   `match`) zodat de pagina je club en de wedstrijd kan tonen.
+3. Heeft de bron eigen instellingen, voeg dan een paneel toe in `web.py`
+   (`SOURCE_PANELS`; alleen het paneel van de gekozen bron wordt getoond) en
+   de instellingen in `settings.py`.
 """
 
 import asyncio
@@ -43,7 +45,7 @@ def build_sources(
 
 
 class SourceManager:
-    """Laat precies één bron draaien: de bron die onder App is gekozen."""
+    """Laat precies één bron draaien: de bron die onder Connectie is gekozen."""
 
     RESTART_DELAY = 5.0  # wachttijd voordat een vastgelopen bron opnieuw start
 
