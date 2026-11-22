@@ -172,6 +172,31 @@ per pagina toegestaan en alle uitvoer wordt ge-escaped.
   De oude adressen `/status`, `/settings`, `/templates` en `/logs` sturen door
   naar het juiste blok.
 
+## Uitwedstrijden (tikkieterug)
+
+Bij een thuiswedstrijd komen de berichten van het scorebord. Bij een
+uitwedstrijd volgt de app de wedstrijd via **tikkieterug** (uitslagen van
+voetbalnederland.nl), met dezelfde sjablonen.
+
+- **Instellen** onder App > Uitwedstrijden: zoek en kies je team. De app
+  gebruikt de openbare API van tikkieterug
+  ([OpenAPI](https://tikkieterug.sholofly.nl/openapi/v1.json)); er is geen
+  sleutel nodig. Een ander adres kan met `TIKKIETERUG_URL` of onder App.
+- **Bron:** automatisch (thuis het scorebord, uit tikkieterug), of vast op het
+  scorebord of op tikkieterug, bijvoorbeeld als het scorebord thuis uitvalt.
+  Tijdens een uitduel negeert de app het scorebord; daar kan dan een ander team
+  spelen.
+- De app haalt het programma van vandaag op en bevraagt de wedstrijd vanaf een
+  kwartier voor de aftrap elke 30 seconden (instelbaar), tot hij is afgelopen.
+- Begin, rust, tweede helft en einde komen **zonder minuut** (tikkieterug kent
+  die niet); doelpunten krijgen de minuut en de doelpuntmaker uit tikkieterug.
+  De afsluiting staat in de echte volgorde, bv. `Hattem - VSCO 61 0-1. #vschat`.
+  Met "Clubnaam in berichten" toon je de eigen club bijvoorbeeld als `VSCO'61`.
+- De gegevens worden door vrijwilligers ingevoerd: berichten kunnen later komen
+  dan op het veld, en een doelpunt zonder ingevulde speler komt zonder naam.
+- Het statuslampje volgt tijdens een uitduel tikkieterug; App > Status toont de
+  bron, de wedstrijd van vandaag en eventuele fouten.
+
 ## Pushmeldingen
 
 Bij elk wedstrijdbericht kan je telefoon een melding krijgen, ook als de app

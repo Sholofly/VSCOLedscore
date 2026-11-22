@@ -261,6 +261,8 @@ class MatchLifecycle:
             "minuut": minute,
             "thuis": home,
             "uit": away,
+            # Bij het scorebord speelt de eigen club altijd thuis.
+            "eigen": home,
             "tegenstander": away,
             "stand": f"{home_score}-{away_score}",
             "thuis_score": home_score,
@@ -397,11 +399,15 @@ class Connector:
         regular_minutes: int = 90,
         connect_func: Callable[..., Any] = connect,
         notifier: Any = None,
+        source_allowed: Callable[[], bool] = lambda: True,
     ) -> None:
         self.settings = settings
         self.state = state
         # Krijgt elk wedstrijdbericht met notify(tekst, sleutel), bv. voor pushmeldingen.
         self.notifier = notifier
+        # Mag het scorebord nu berichten leveren? Niet tijdens een uitduel: dan kan er
+        # thuis een ander team op het veld staan (tikkieterug levert dan de berichten).
+        self.source_allowed = source_allowed
         self.regular_minutes = regular_minutes
         self._connect = connect_func
         self._lifecycle: MatchLifecycle | None = None
@@ -429,6 +435,15 @@ class Connector:
         return True
 
     def _publish(self, events: list[str]) -> None:
+        """Berichten van het scorebord: alleen als het scorebord nu de bron is."""
+        if events and not self.source_allowed():
+            for event in events:
+                logger.info("Scorebord genegeerd (uitwedstrijd, bron is tikkieterug): %s", event)
+            return
+        self.publish_events(events)
+
+    def publish_events(self, events: list[str]) -> None:
+        """Berichten publiceren: log, lijst in de webomgeving en pushmeldingen."""
         for event in events:
             logger.info("%s", event)
             key = self.state.add_message(event, getattr(event, "image", None))
@@ -570,6 +585,8 @@ def read_setting(config: Mapping[str, str | None], name: str, default: str = "")
 
 async def main() -> None:
     from push import DEFAULT_SUBJECT, PushSender, PushStore, load_vapid, validate_subject
+    from settings import DEFAULT_TIKKIE_URL
+    from tikkie import TikkieWatcher
     from web import load_session_secret, start_web
 
     config = dotenv_values()
@@ -579,6 +596,7 @@ async def main() -> None:
         data_dir / "settings.json",
         read_setting(config, "WS_URL"),
         read_setting(config, "WS_TOKEN"),
+        tikkie_url=read_setting(config, "TIKKIETERUG_URL", DEFAULT_TIKKIE_URL),
     )
     memory_log = setup_logging(settings, log_dir / "app.log")
     setup_raw_log(read_setting(config, "RAW_LOG_FILE", str(log_dir / "websocket-raw.log")))
@@ -608,7 +626,12 @@ async def main() -> None:
             # Pushdiensten eisen een contactadres: mailto:... of https://domein (zonder pad).
             subject=validate_subject(vapid, read_setting(config, "VAPID_SUBJECT", DEFAULT_SUBJECT)),
         )
-    connector = Connector(settings, state, int(minutes), notifier=pusher)
+    watcher: TikkieWatcher | None = None
+    connector = Connector(
+        settings, state, int(minutes), notifier=pusher,
+        source_allowed=lambda: watcher is None or watcher.active_source() == "scoreboard",
+    )
+    watcher = TikkieWatcher(settings, connector.publish_events)
     web_runner = None
     if password:
         web_runner = await start_web(
@@ -619,6 +642,7 @@ async def main() -> None:
             memory_log=memory_log,
             session_secret=load_session_secret(data_dir / "session_secret"),
             push=pusher,
+            tikkie=watcher,
             # Tweede login: alleen berichten delen en eigen instellingen (leeg = uit).
             share_user=read_setting(config, "SHARE_USER", "gebruiker"),
             share_password=read_setting(config, "SHARE_PASSWORD"),
@@ -636,14 +660,14 @@ async def main() -> None:
             loop.add_signal_handler(sig, stop.set)
 
     runner = asyncio.create_task(connector.run())
+    tikkie_runner = asyncio.create_task(watcher.run())
     stopper = asyncio.create_task(stop.wait())
     try:
-        await asyncio.wait({runner, stopper}, return_when=asyncio.FIRST_COMPLETED)
+        await asyncio.wait({runner, tikkie_runner, stopper}, return_when=asyncio.FIRST_COMPLETED)
     finally:
-        runner.cancel()
-        stopper.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await runner
+        for task in (runner, tikkie_runner, stopper):
+            task.cancel()
+        await asyncio.gather(runner, tikkie_runner, return_exceptions=True)
         if web_runner is not None:
             await web_runner.cleanup()
         logger.info("Gestopt")

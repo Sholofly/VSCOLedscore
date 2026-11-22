@@ -32,7 +32,15 @@ from messages import (
     render_message,
     validate_template,
 )
-from settings import MAX_GOAL_WAIT_SECONDS, Settings, token_expiry
+from settings import (
+    MAX_GOAL_WAIT_SECONDS,
+    MAX_POLL_SECONDS,
+    MIN_POLL_SECONDS,
+    SOURCE_MODES,
+    Settings,
+    token_expiry,
+)
+from tikkie import TikkieError
 from state import ConnectionState, MatchMessage, MemoryLogHandler
 
 logger = logging.getLogger(__name__)
@@ -55,6 +63,11 @@ MESSAGES = {
     "templates": "Sjablonen opgeslagen.",
     "reset": "Sjablonen hersteld naar de standaardteksten.",
     "goal_wait": "Wachttijd opgeslagen. Hij geldt vanaf het volgende doelpunt.",
+    "source": "Bron opgeslagen.",
+    "team": "Team opgeslagen. Het programma wordt opnieuw opgehaald.",
+    "club_name": "Clubnaam opgeslagen.",
+    "poll": "Interval opgeslagen.",
+    "tikkie_url": "Adres van tikkieterug opgeslagen.",
 }
 
 CSS = """
@@ -92,6 +105,10 @@ border-bottom:2px solid currentColor;transform:rotate(-45deg);transition:transfo
 details.block[open]>summary::before{transform:rotate(45deg)}
 .block-body{padding:0 16px 16px}.block-body h3{font-size:1rem;margin:16px 0 4px}
 .block-body h3:first-child{margin-top:0}.block-body form+h3{margin-top:24px}
+label.choice{display:flex;align-items:center;gap:10px;min-height:44px;font-weight:400;margin:0}
+label.choice input{width:20px;height:20px;margin:0;accent-color:var(--accent)}
+form.result{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0;
+border-bottom:1px solid var(--line)}form.result button{padding:6px 14px}
 .note{border-left:3px solid var(--warn);padding:6px 10px;margin:0 0 12px;color:var(--muted);font-size:.92rem}
 details.raw{border-bottom:1px solid var(--line);padding:8px 0}details.raw:last-child{border-bottom:0}
 details.raw summary{cursor:pointer;word-break:break-word}details.raw pre{margin-top:8px;max-height:60vh}input.num{max-width:8rem}
@@ -362,15 +379,36 @@ def status_table_html(app: web.Application) -> str:
         ("URL", f"<code>{esc(display_url(settings.url) or '-')}</code>"),
         ("Token", esc(token_text)),
     ]
+    tikkie = app.get("tikkie")
+    if tikkie is not None:
+        t = tikkie.state
+        source = "tikkieterug (uitwedstrijd)" if tikkie.active_source() == "tikkieterug" else "scorebord"
+        rows += [
+            ("Bron van de berichten", esc(source)),
+            ("Wedstrijd vandaag", esc(t.match_text or "-")),
+            ("tikkieterug", f'<span class="pill {esc(t.level)}">{esc(t.status)}</span>'),
+            ("Laatst bevraagd", esc(fmt_time(t.last_poll_at))),
+            ("Laatste fout tikkieterug", esc(t.last_error or "-")
+             + (f' <span class="muted">({esc(fmt_time(t.last_error_at))})</span>' if t.last_error else "")),
+        ]
     return "<table>" + "".join(f"<tr><th>{k}</th><td>{v}</td></tr>" for k, v in rows) + "</table>"
+
+
+def led_state(app: web.Application) -> tuple[str, str]:
+    """(niveau, tekst) voor het lampje: tijdens een uitduel de status van tikkieterug."""
+    tikkie = app.get("tikkie")
+    if tikkie is not None and tikkie.active_source() == "tikkieterug":
+        return tikkie.state.level, f"uitduel: {tikkie.state.status}"
+    state: ConnectionState = app["state"]
+    return state.level, state.status
 
 
 def led_html(request: web.Request) -> str:
     """Statuslampje, live bijgewerkt. Voor de beheerder een link naar de status onder App."""
-    state: ConnectionState = request.app["state"]
+    level, status = led_state(request.app)
     inner = (
-        f'<span class="led {esc(state.level)}" aria-hidden="true"></span>'
-        f'<span id="led-text">{esc(state.status)}</span>'
+        f'<span class="led {esc(level)}" aria-hidden="true"></span>'
+        f'<span id="led-text">{esc(status)}</span>'
     )
     if request.get("role") == ROLE_ADMIN:
         return f'<a id="led" class="led-bar" href="/app#status" title="Status van de verbinding">{inner}</a>'
@@ -471,6 +509,92 @@ def goal_wait_html(request: web.Request, wait_error: str = "", wait_value: str |
     )
 
 
+def tikkie_html(
+    request: web.Request,
+    error: str = "",
+    error_field: str = "",
+    results: list[dict] | None = None,
+    query: str = "",
+) -> str:
+    """Blok Uitwedstrijden: bron, team, clubnaam, interval en de verbinding met tikkieterug."""
+    settings: Settings = request.app["settings"]
+
+    def err(name: str) -> str:
+        return message_box(error, "error") if error and error_field == name else ""
+
+    def form(action: str, inner: str, button: str) -> str:
+        return (
+            f'<form method="post" action="/settings">{csrf_field(request)}'
+            f'<input type="hidden" name="action" value="{action}">{inner}{err(action)}'
+            f'<div class="row"><button type="submit">{esc(button)}</button></div></form>'
+        )
+
+    radios = "".join(
+        f'<label class="choice"><input type="radio" name="source_mode" value="{esc(key)}"'
+        f'{" checked" if settings.source_mode == key else ""}> {esc(label)}</label>'
+        for key, label in SOURCE_MODES.items()
+    )
+    team = (
+        f"<strong>{esc(settings.team_name or settings.team_id)}</strong> (id {esc(settings.team_id)})"
+        if settings.team_id else "nog geen team gekozen"
+    )
+    found = ""
+    if results is not None:
+        if not results:
+            found = '<p class="muted small">Geen teams gevonden.</p>'
+        for club in results:
+            label = " \u00b7 ".join(
+                str(v) for v in (club.get("name"), club.get("speeldag"), club.get("competitionName")) if v
+            )
+            found += (
+                '<form method="post" action="/settings" class="result">'
+                f'{csrf_field(request)}<input type="hidden" name="action" value="team">'
+                f'<input type="hidden" name="team_id" value="{esc(club.get("id", ""))}">'
+                f'<input type="hidden" name="team_name" value="{esc(club.get("name", ""))}">'
+                f'<span>{esc(label)}</span><button type="submit" class="secondary">Kies</button></form>'
+            )
+    return (
+        '<p class="muted small">Bij een uitwedstrijd volgt de app de wedstrijd via tikkieterug '
+        f"(elke {esc(settings.poll_seconds)} seconden, vanaf een kwartier voor de aftrap). Begin, rust, "
+        "tweede helft en einde hebben dan geen minuut; doelpunten de minuut uit tikkieterug.</p>"
+        "<h3>Bron van de berichten</h3>"
+        + form("source", radios, "Bron opslaan")
+        + f"<h3>Team</h3><p>{team}</p>"
+        + '<form method="post" action="/settings">'
+        f'{csrf_field(request)}<input type="hidden" name="action" value="team_search">'
+        '<label for="team_q">Zoek je team in tikkieterug</label>'
+        f'<input type="text" id="team_q" name="q" value="{esc(query)}" maxlength="60" required '
+        'autocomplete="off" placeholder="bv. VSCO">'
+        f'{err("team_search")}{err("team")}'
+        '<div class="row"><button type="submit" class="secondary">Zoeken</button></div></form>'
+        f"{found}"
+        + "<h3>Clubnaam in berichten</h3>"
+        + form(
+            "club_name",
+            '<label for="club_name">Naam van de eigen club bij uitduels (leeg = naam uit tikkieterug)</label>'
+            f'<input type="text" id="club_name" name="club_name" value="{esc(settings.club_name)}" '
+            'maxlength="60" autocomplete="off" placeholder="bv. VSCO&#x27;61">',
+            "Clubnaam opslaan",
+        )
+        + "<h3>Interval</h3>"
+        + form(
+            "poll",
+            f'<label for="poll">Elke zoveel seconden bevragen ({MIN_POLL_SECONDS}-{MAX_POLL_SECONDS})</label>'
+            f'<input type="number" id="poll" name="poll" class="num" min="{MIN_POLL_SECONDS}" '
+            f'max="{MAX_POLL_SECONDS}" step="1" inputmode="numeric" required value="{esc(settings.poll_seconds)}">',
+            "Interval opslaan",
+        )
+        + "<h3>Adres van tikkieterug</h3>"
+        + form(
+            "tikkie_url",
+            '<label for="tikkie_url">Adres (https://); de openbare API, geen sleutel nodig</label>'
+            f'<input type="url" id="tikkie_url" name="tikkie_url" value="{esc(settings.tikkie_url)}" '
+            'required maxlength="2048" autocomplete="off">',
+            "Adres opslaan",
+        )
+    )
+
+
 def logging_html(request: web.Request) -> str:
     live = live_logs(request.app)
     raw_lines = tail_lines(request.app["raw_log"], RAW_LOG_ENTRIES, max_bytes=3_000_000)
@@ -488,6 +612,8 @@ def logging_html(request: web.Request) -> str:
 # Welk blok open moet na opslaan (via ?msg=...).
 BLOCK_FOR_MESSAGE = {
     "url": "verbinding", "token": "verbinding", "goal_wait": "doelpunten",
+    "source": "uitwedstrijden", "team": "uitwedstrijden", "club_name": "uitwedstrijden",
+    "poll": "uitwedstrijden", "tikkie_url": "uitwedstrijden",
     "templates": "sjablonen", "reset": "sjablonen",
 }
 OPEN_HASH_JS = (
@@ -504,6 +630,7 @@ def app_page(
     goal_wait: dict | None = None,
     templates: tuple[dict, dict] | None = None,
     status: int = 200,
+    tikkie: dict | None = None,
 ) -> web.Response:
     """App-instellingen (alleen beheerder): uitklapbare blokken, elk met een eigen opslaanknop."""
     settings: Settings = request.app["settings"]
@@ -522,6 +649,7 @@ def app_page(
         '<p class="note">Deze instellingen gelden voor iedereen die de app gebruikt.</p>'
         + block("status", "Status", f'<div id="live-table">{status_table_html(request.app)}</div>')
         + block("verbinding", "Verbinding", connection_html(request, **(connection or {})))
+        + block("uitwedstrijden", "Uitwedstrijden", tikkie_html(request, **(tikkie or {})))
         + block("doelpunten", "Doelpunten", goal_wait_html(request, **(goal_wait or {})))
         + block("sjablonen", "Sjablonen", templates_form(request, values, errors))
         + block("logging", "Logging", logging_html(request))
@@ -558,9 +686,27 @@ async def settings_post(request: web.Request) -> web.Response:
         elif action == "goal_wait":
             settings.set_goal_wait(form.get("goal_wait", ""))
             logger.info("Wachttijd op de doelpuntmaker gewijzigd naar %s seconden", settings.goal_wait_seconds)
+        elif action == "source":
+            settings.set_source_mode(str(form.get("source_mode", "")))
+            logger.info("Bron van de berichten gewijzigd naar %s", settings.source_mode)
+        elif action == "team_search":
+            return await team_search(request, str(form.get("q", "")))
+        elif action == "team":
+            settings.set_team(form.get("team_id", ""), str(form.get("team_name", "")))
+            logger.info("Team voor uitwedstrijden gewijzigd naar %s", settings.team_name or settings.team_id)
+        elif action == "club_name":
+            settings.set_club_name(str(form.get("club_name", "")))
+        elif action == "poll":
+            settings.set_poll_seconds(form.get("poll", ""))
+        elif action == "tikkie_url":
+            settings.set_tikkie_url(str(form.get("tikkie_url", "")))
+            logger.info("Adres van tikkieterug gewijzigd via de webomgeving")
         else:
             raise ValueError("Onbekende actie.")
     except ValueError as error:
+        if action in ("source", "team", "club_name", "poll", "tikkie_url"):
+            failed = {"error": str(error), "error_field": action}
+            return app_page(request, "uitwedstrijden", tikkie=failed, status=400)
         if action == "token":
             return app_page(request, "verbinding", connection={"token_error": str(error)}, status=400)
         if action == "goal_wait":
@@ -569,6 +715,25 @@ async def settings_post(request: web.Request) -> web.Response:
         url = {"url_error": str(error), "url_value": str(form.get("url", ""))}
         return app_page(request, "verbinding", connection=url, status=400)
     raise web.HTTPSeeOther(f"/app?msg={action}#{BLOCK_FOR_MESSAGE[action]}")
+
+
+async def team_search(request: web.Request, query: str) -> web.Response:
+    """Zoek een team via tikkieterug en toon de resultaten om er één te kiezen."""
+    query = " ".join(query.split())[:60]
+    tikkie = request.app.get("tikkie")
+    settings: Settings = request.app["settings"]
+    if len(query) < 2:
+        failed = {"error": "Vul minstens 2 letters in.", "error_field": "team_search", "query": query}
+        return app_page(request, "uitwedstrijden", tikkie=failed, status=400)
+    if tikkie is None:
+        failed = {"error": "tikkieterug is niet beschikbaar.", "error_field": "team_search", "query": query}
+        return app_page(request, "uitwedstrijden", tikkie=failed, status=400)
+    try:
+        results = await tikkie.client.search_clubs(query)
+    except TikkieError as error:
+        failed = {"error": str(error), "error_field": "team_search", "query": query}
+        return app_page(request, "uitwedstrijden", tikkie=failed, status=502)
+    return app_page(request, "uitwedstrijden", tikkie={"results": results[:20], "query": query})
 
 
 def templates_form(request: web.Request, values: dict[str, str], errors: dict[str, str]) -> str:
@@ -702,7 +867,7 @@ def live_logs(app: web.Application, admin: bool = True) -> dict:
     data = {
         "messages": messages,
         "messages_html": messages_html(messages),
-        "led": {"level": app["state"].level, "status": app["state"].status},
+        "led": dict(zip(("level", "status"), led_state(app))),
     }
     if admin:
         data["status_html"] = status_table_html(app)
@@ -1193,9 +1358,11 @@ def create_web_app(
     push=None,
     share_user: str = "gebruiker",
     share_password: str = "",
+    tikkie=None,
 ) -> web.Application:
     app = web.Application(middlewares=[security], client_max_size=64 * 1024)
     app["push"] = push  # PushSender, of None als meldingen uit staan
+    app["tikkie"] = tikkie  # TikkieWatcher (uitwedstrijden), of None
     app["fetch_photo"] = photo_fetcher or fetch_photo  # vervangbaar in tests
     app["photo_cache"] = OrderedDict()
     app["settings"] = settings
@@ -1258,11 +1425,12 @@ async def start_web(
     push=None,
     share_user: str = "gebruiker",
     share_password: str = "",
+    tikkie=None,
 ) -> web.AppRunner:
     app = create_web_app(
         settings, state, app_log, raw_log, username, password, memory_log,
         session_secret=session_secret, session_days=session_days, push=push,
-        share_user=share_user, share_password=share_password,
+        share_user=share_user, share_password=share_password, tikkie=tikkie,
     )
     runner = web.AppRunner(app, access_log=None)
     await runner.setup()

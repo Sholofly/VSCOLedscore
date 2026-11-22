@@ -6,14 +6,16 @@ from typing import Any
 
 # Eén regel per aanduiding: wat je in een sjabloon als {naam} kunt gebruiken.
 PLACEHOLDERS: dict[str, str] = {
-    "minuut": "Speelminuut, bij het einde ook met blessuretijd (bv. 90+2)",
-    "thuis": "Naam van de thuisploeg (eigen club)",
-    "uit": "Naam van de uitploeg (tegenstander)",
-    "tegenstander": "Hetzelfde als {uit}",
-    "stand": "Stand, bv. 2-1",
+    "minuut": "Speelminuut, bij het einde ook met blessuretijd (bv. 90+2). Is er geen minuut "
+    "(uitduels: begin, rust, tweede helft, einde), dan valt \"'{minuut} \" vanzelf weg",
+    "thuis": "Naam van de thuisploeg",
+    "uit": "Naam van de uitploeg",
+    "eigen": "Naam van de eigen club (thuis of uit)",
+    "tegenstander": "Naam van de tegenstander",
+    "stand": "Stand in de volgorde thuis-uit, bv. 2-1",
     "thuis_score": "Doelpunten thuis",
     "uit_score": "Doelpunten uit",
-    "hashtag": "#vsc plus de eerste drie letters van de uitploeg",
+    "hashtag": "#vsc plus de eerste drie letters van de tegenstander",
     "speler": "Naam van de doelpuntmaker (alleen bij een eigen doelpunt)",
     "blessuretijd": "Aantal minuten blessuretijd (alleen bij het einde)",
     "afsluiting": "De afsluitregel (sjabloon 'afsluiting')",
@@ -34,9 +36,9 @@ TEMPLATE_INFO: dict[str, tuple[str, set[str]]] = {
 
 DEFAULT_TEMPLATES: dict[str, str] = {
     "start": "'{minuut} De wedstrijd is begonnen! {afsluiting}",
-    "goal_home": "'{minuut} DOELPUNT {thuis}! {speler}! {afsluiting}",
-    "goal_home_no_scorer": "'{minuut} DOELPUNT {thuis}! {afsluiting}",
-    "goal_away": "'{minuut} Doelpunt {uit}. {afsluiting}",
+    "goal_home": "'{minuut} DOELPUNT {eigen}! {speler}! {afsluiting}",
+    "goal_home_no_scorer": "'{minuut} DOELPUNT {eigen}! {afsluiting}",
+    "goal_away": "'{minuut} Doelpunt {tegenstander}. {afsluiting}",
     "rest": "'{minuut} Rust. {afsluiting}",
     "second_half": "'{minuut} De tweede helft is begonnen! {afsluiting}",
     "end_win": "'{minuut} AFGELOPEN! {afsluiting}",
@@ -48,6 +50,7 @@ SAMPLE_CONTEXT: dict[str, Any] = {
     "minuut": "12",
     "thuis": "VSCO'61",
     "uit": "VSW 1",
+    "eigen": "VSCO'61",
     "tegenstander": "VSW 1",
     "stand": "2-1",
     "thuis_score": 2,
@@ -73,6 +76,8 @@ class Message(str):
 
 MAX_TEMPLATE_LENGTH = 500
 _PLACEHOLDER = re.compile(r"\{(\w+)\}")
+# "'{minuut} " aan het begin (of los in de tekst) weghalen als er geen minuut is.
+_NO_MINUTE = re.compile(r"'?\{minuut\}\s*")
 _BASE = set(PLACEHOLDERS) - {"speler", "blessuretijd", "afsluiting"}
 
 
@@ -111,6 +116,8 @@ def render_message(
     """Render een bericht inclusief afsluiting. Leeg sjabloon geeft een lege tekst."""
     template = templates.get(key, DEFAULT_TEMPLATES[key])
     values = dict(context)
+    if values.get("minuut") in ("", None):
+        template = _NO_MINUTE.sub("", template)
     trailer = templates.get("afsluiting", DEFAULT_TEMPLATES["afsluiting"])
     values["afsluiting"] = render(trailer, values).strip()
     return render(template, values).strip()

@@ -26,6 +26,7 @@ Gebruikersdocumentatie staat in [README.md](README.md).
 | [messages.py](messages.py) | Sjablonen: standaardteksten, aanduidingen (`{minuut}` ...), validatie, `Message` (tekst + foto-URL) |
 | [settings.py](settings.py) | URL/token/sjablonen in `data/settings.json` (heeft voorrang op `.env`), atomair opgeslagen |
 | [push.py](push.py) | Web Push: VAPID-sleutels, aangemelde apparaten (alleen bekende pushdiensten), versturen, "startpagina open" |
+| [tikkie.py](tikkie.py) | Uitwedstrijden via tikkieterug (openbare REST-API): client, `TikkieLifecycle` (momentopnames → berichten), `TikkieWatcher` (programma, pollen, bronkeuze) |
 | [state.py](state.py) | `ConnectionState` (status + laatste wedstrijdberichten), `MemoryLogHandler` |
 | [web.py](web.py) | aiohttp-webomgeving: pagina's, inloggen/sessies, live-updates, foto-doorgifte, PWA |
 | `static/` | App-iconen (PNG) |
@@ -63,6 +64,24 @@ Elk bericht is de volledige status (~175 KB JSON). Relevant in `scoreboard_data`
 - `scorers.home[n]` / `.away[n]`: `{"player": {"name", "image", "goalImage", ...}, "time", "period"}`.
   De lijst kan `null` bevatten. **De doelpuntmaker komt ~5 s ná de standwijziging,
   in een apart bericht**; zonder gekozen speler komt er niets.
+
+## tikkieterug (uitwedstrijden)
+
+- De app gebruikt de **openbare REST-API** (geen sleutel; spec:
+  https://tikkieterug.sholofly.nl/openapi/v1.json): `/clubs?search=&active=true`,
+  `/clubs/{id}/programma`, `/clubs/{id}/uitslagen`, `/matches/{id}?source=`.
+  Een onbekend pad geeft de website (HTML, status 200): de client controleert
+  daarom op JSON. Status: scheduled/live/halftime/ended/suspended/cancelled;
+  `goals` met minute/player/side/teamScore.
+- `/mcp` op dezelfde server is de MCP-koppeling voor Claude (met `X-Api-Key`
+  `TIKKIETERUG_MCP_KEY`); die hoort niet in de app. Claude Code moet na `setx`
+  volledig herstarten om de variabele te zien.
+- Namen hebben soms dubbele spaties; "Onbekende Speler" = geen maker. Minuten zijn
+  door vrijwilligers ingevuld (blessuretijd vaak als 45 of 90).
+- Bronkeuze (`Settings.source_mode`): auto = thuis scorebord, uit tikkieterug;
+  tijdens een uitduel worden scorebordberichten genegeerd (`Connector.source_allowed`).
+- Uitduel-berichten: begin/rust/tweede helft/einde zonder minuut (`'{minuut} ` valt
+  weg), afsluiting in echte volgorde, `{eigen}`/`{tegenstander}` voor de eigen club.
 
 ## Gedrag dat bewust zo is
 
