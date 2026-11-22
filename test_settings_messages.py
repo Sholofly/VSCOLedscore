@@ -6,7 +6,7 @@ from pathlib import Path
 
 from messages import DEFAULT_TEMPLATES, render, render_message, validate_template
 from settings import Settings, token_expiry
-from app import MatchLifecycle
+from sources.scoreboard import MatchLifecycle
 
 import test_app
 import test_app
@@ -56,7 +56,7 @@ class CustomTemplateTests(unittest.TestCase):
     def test_template_error_falls_back_to_default(self):
         lifecycle = MatchLifecycle(templates=lambda: 1 / 0)
         lifecycle.update(test_app.GoalTests.payload(), now=0)
-        with self.assertLogs("app", level="ERROR"):
+        with self.assertLogs("sources", level="ERROR"):
             events = lifecycle.update(test_app.GoalTests.payload(started_at=test_app.START), now=1)
         self.assertEqual(len(events), 1)
         self.assertIn("De wedstrijd is begonnen!", events[0])

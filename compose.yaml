@@ -1,8 +1,8 @@
 services:
-  websocket-logger:
+  matchshare:
     build: .
     # Op de NAS: zet IMAGE=ghcr.io/<jouwnaam>/<repo>:latest in .env en gebruik 'docker compose pull'.
-    image: ${IMAGE:-vsco-scorebord-connector}
+    image: ${IMAGE:-matchshare}
     env_file:
       - .env
     environment:
@@ -15,7 +15,9 @@ services:
       # zet BIND_ADDRESS=0.0.0.0 in .env.
       - "${BIND_ADDRESS:-127.0.0.1}:${HOST_PORT:-8080}:8080"
     volumes:
-      - scorebord-data:/app/data   # URL, token en sjablonen die je in de webomgeving instelt
+      # Instellingen, sessies en meldingen. De naam blijft bewust 'scorebord-data': een
+      # andere naam zou een nieuw, leeg volume betekenen.
+      - scorebord-data:/app/data
       - ./logs:/app/logs           # app.log en websocket-raw.log
     restart: unless-stopped
 

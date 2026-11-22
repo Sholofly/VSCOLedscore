@@ -1,9 +1,11 @@
-# VSCO scorebord-connector
+# Matchshare
 
-Dit project maakt verbinding met de VSCO-scorebord-websocket, herkent
-wedstrijdgebeurtenissen en toont ze als berichten in de console en in een
-webomgeving. Daar beheer je ook de berichtteksten, de URL, het token en bekijk
-je de logging. Tokens worden niet automatisch vernieuwd.
+Matchshare maakt van wedstrijdinformatie kant-en-klare berichten om te delen:
+aftrap, doelpunten (met doelpuntmaker en foto), rust, tweede helft en einde. De
+informatie komt van een **bron** die je kiest: het **scorebord** van de club of
+**Voetbalnederland**; er kunnen later bronnen bij komen. De berichten verschijnen
+in een webapp voor de telefoon, met een Delen-knop en pushmeldingen. Daar beheer
+je ook de bron, de berichtteksten en bekijk je de logging.
 
 ## Instellen (.env)
 
@@ -20,14 +22,15 @@ SHARE_USER=gebruiker
 SHARE_PASSWORD=<ander-wachtwoord>
 ```
 
-- `WS_URL` en `WS_TOKEN` zijn beginwaarden. Wat je later in de webomgeving
+- `WS_URL` en `WS_TOKEN` (de bron Scorebord) zijn beginwaarden. Wat je later in de webomgeving
   opslaat, wordt bewaard in `data/settings.json` (in Docker: het volume
   `scorebord-data`) en **heeft voorrang** op `.env`. Wijzig je daarna het token
   in `.env`, dan merk je daar niets van: gebruik dan de webomgeving.
 - Het token wordt als `token`-queryparameter aan de URL toegevoegd en correct
   URL-gecodeerd.
 - `WEB_PASSWORD` is verplicht in Docker. Lokaal geldt: zonder wachtwoord staat
-  de webomgeving uit en moeten `WS_URL` en `WS_TOKEN` in `.env` staan.
+  de webomgeving uit en moeten `WS_URL` en `WS_TOKEN` in `.env` staan. Tokens worden
+  niet automatisch vernieuwd.
 
 ## Draaien met Docker
 
@@ -71,14 +74,21 @@ Bijwerken na een nieuwe versie:
 git pull && docker compose pull && docker compose up -d
 ```
 
+- **Eenmalig na de naamswijziging naar Matchshare:** de service heet nu
+  `matchshare` (was `websocket-logger`). Gebruik één keer
+  `docker compose up -d --remove-orphans`, zodat de oude container verdwijnt.
+  Het volume `scorebord-data` houdt bewust zijn naam: je instellingen, sessies
+  en meldingen blijven bewaard. Kies daarna onder App > Bron de bron.
+
 - **Wacht tot de image klaar is.** Na elke push bouwt GitHub de image; dat duurt
   een paar minuten. Pull je te vroeg, dan krijg je nog de oude versie. Kijk bij
   het tabblad Actions van de repo of de laatste run groen is.
 - **Controleren:** `docker compose ps` moet `healthy` tonen en
-  `docker compose logs --tail 20` moet `Webomgeving bereikbaar` en
-  `Verbonden met het scorebord` bevatten.
-- **Je instellingen blijven bewaard:** `.env` staat niet in git en de URL, het
-  token en de sjablonen uit de webomgeving staan in het volume `scorebord-data`.
+  `docker compose logs --tail 20` moet `Webomgeving bereikbaar` en de gekozen
+  bron (`Bron: ...`) bevatten.
+- **Je instellingen blijven bewaard:** `.env` staat niet in git en de bron, de
+  URL, het token en de sjablonen uit de webomgeving staan in het volume
+  `scorebord-data`.
 - **`git pull` klaagt over lokale wijzigingen?** Dan is een bestand in de map
   aangepast, vaak `compose.yaml`. Zet instellingen altijd in `.env`. Met
   `git status` zie je welk bestand het is.
@@ -154,15 +164,18 @@ per pagina toegestaan en alle uitvoer wordt ge-escaped.
   een testmelding, en uitloggen.
 - **App** (alleen beheerder, geldt voor iedereen), met uitklapbare blokken die
   elk een eigen opslaanknop hebben:
-  - **Status:** verbindingsstatus, laatste bericht en fout, volgende poging, URL
-    en token (met vervaldatum als het een JWT met `exp` is). Het lampje linkt
-    hierheen.
-  - **Verbinding:** URL en token. Het token staat verborgen in het veld en maak
-    je zichtbaar met het oog-icoon; het staat alleen op deze pagina. Een nieuwe
-    URL of een nieuw token bouwt de verbinding direct opnieuw op. De URL mag
-    geen `token=` bevatten.
-  - **Doelpunten:** de wachttijd op de doelpuntmaker (standaard 20 seconden,
-    0 = niet wachten; geldt vanaf het volgende doelpunt).
+  - **Status:** de gekozen bron en zijn status (bij het scorebord: verbinding,
+    laatste bericht en fout, URL en token met vervaldatum; bij Voetbalnederland:
+    team, wedstrijd van vandaag, laatst bevraagd). Het lampje linkt hierheen.
+  - **Bron:** kies welke bron de berichten levert (zie hieronder).
+  - **Scorebord:** URL en token, en de wachttijd op de doelpuntmaker (standaard
+    20 seconden, 0 = niet wachten). Het token staat verborgen in het veld en
+    maak je zichtbaar met het oog-icoon; het staat alleen hier. Een nieuwe URL
+    of een nieuw token bouwt de verbinding direct opnieuw op. De URL mag geen
+    `token=` bevatten.
+  - **Voetbalnederland:** team zoeken en kiezen, clubnaam in berichten,
+    interval en het adres van de API.
+  - **Hashtag:** een eigen hashtag voor één wedstrijd (zie hieronder).
   - **Sjablonen:** de teksten van alle berichten, met voorbeeld. Een leeg
     sjabloon betekent dat dat bericht niet wordt verstuurd.
   - **Logging:** de laatste 300 regels van `app.log` (live, nieuwste bovenaan)
@@ -172,30 +185,33 @@ per pagina toegestaan en alle uitvoer wordt ge-escaped.
   De oude adressen `/status`, `/settings`, `/templates` en `/logs` sturen door
   naar het juiste blok.
 
-## Uitwedstrijden (tikkieterug)
+## Bronnen
 
-Bij een thuiswedstrijd komen de berichten van het scorebord. Bij een
-uitwedstrijd volgt de app de wedstrijd via **tikkieterug** (uitslagen van
-voetbalnederland.nl), met dezelfde sjablonen.
+Er draait altijd precies één bron: de bron die je kiest onder App > Bron. Een
+andere bron kiezen stopt de vorige direct. De berichten, sjablonen, hashtag,
+meldingen en de Delen-knop werken voor elke bron hetzelfde.
 
-- **Instellen** onder App > Uitwedstrijden: zoek en kies je team. De app
-  gebruikt de openbare API van tikkieterug
-  ([OpenAPI](https://tikkieterug.sholofly.nl/openapi/v1.json)); er is geen
-  sleutel nodig. Een ander adres kan met `TIKKIETERUG_URL` of onder App.
-- **Bron:** automatisch (thuis het scorebord, uit tikkieterug), of vast op het
-  scorebord of op tikkieterug, bijvoorbeeld als het scorebord thuis uitvalt.
-  Tijdens een uitduel negeert de app het scorebord; daar kan dan een ander team
-  spelen.
-- De app haalt het programma van vandaag op en bevraagt de wedstrijd vanaf een
-  kwartier voor de aftrap elke 30 seconden (instelbaar), tot hij is afgelopen.
-- Begin, rust, tweede helft en einde komen **zonder minuut** (tikkieterug kent
-  die niet); doelpunten krijgen de minuut en de doelpuntmaker uit tikkieterug.
-  De afsluiting staat in de echte volgorde, bv. `Hattem - VSCO 61 0-1. #hatvsc`.
-  Met "Clubnaam in berichten" toon je de eigen club bijvoorbeeld als `VSCO'61`.
-- De gegevens worden door vrijwilligers ingevoerd: berichten kunnen later komen
-  dan op het veld, en een doelpunt zonder ingevulde speler komt zonder naam.
-- Het statuslampje volgt tijdens een uitduel tikkieterug; App > Status toont de
-  bron, de wedstrijd van vandaag en eventuele fouten.
+- **Scorebord:** live via de websocket van het scorebord. Je club is de
+  thuisploeg op het scorebord. Elk bericht heeft een speelminuut (met
+  blessuretijd per helft); een eigen doelpunt wacht kort op de doelpuntmaker.
+- **Voetbalnederland:** standen van het amateurvoetbal, door vrijwilligers
+  bijgewerkt. Je club is het team dat je onder App > Voetbalnederland kiest,
+  thuis of uit. De app haalt het programma van vandaag op en bevraagt de
+  wedstrijd vanaf een kwartier voor de aftrap elke 30 seconden (instelbaar),
+  tot hij is afgelopen. Er is geen sleutel nodig; een ander adres van de API
+  kan met `VOETBALNEDERLAND_URL` of onder App.
+  - Begin, rust, tweede helft en einde komen **zonder minuut**; doelpunten
+    krijgen de minuut en de doelpuntmaker. De afsluiting staat in de echte
+    volgorde, bv. `Hattem - VSCO 61 0-1. #hatvsc`. Met "Clubnaam in berichten"
+    toon je de eigen club bijvoorbeeld als `VSCO'61`.
+  - Berichten kunnen later komen dan op het veld; een doelpunt zonder ingevulde
+    speler komt zonder naam, en een rust die niet wordt ingevoerd geeft geen
+    rustbericht.
+
+**Een bron toevoegen** (voor ontwikkelaars): maak in `sources/` een subklasse
+van `Source` met `id`, `label`, `description`, `run`, `led` en `status_rows`,
+en zet hem in `build_sources` in `sources/__init__.py`. Hij verschijnt dan
+vanzelf onder App > Bron. Eigen instellingen krijgen een blok in `web.py`.
 
 ## Pushmeldingen
 
@@ -254,7 +270,7 @@ voor de uitleg.
 eerste drie letters van de **uitploeg**, zonder cijfers en leestekens:
 `VSCO'61 - VSW 1` wordt `#vscvsw`, `Limmen - WSV 30` wordt `#limwsv`. Bij een
 uitwedstrijd staat de thuisploeg voorop: `Hattem - VSCO 61` wordt `#hatvsc`. Dit
-geldt zowel voor het scorebord als voor tikkieterug.
+geldt voor elke bron.
 
 Voor één wedstrijd kun je een eigen hashtag instellen op de pagina App, blok
 **Hashtag** (met of zonder `#`; letters, cijfers en een underscore, maximaal 30

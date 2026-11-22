@@ -9,7 +9,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from websockets.asyncio.server import serve
 
-from app import Connector
+from sources.scoreboard import Connector
 from settings import Settings
 from state import ConnectionState
 
@@ -154,7 +154,7 @@ class ConnectorTests(unittest.IsolatedAsyncioTestCase):
 
         _, port = await self.server(handler)
         settings, connector = self.make_connector(f"ws://127.0.0.1:{port}/club/")
-        with self.assertLogs("app", level="INFO") as logs:
+        with self.assertLogs("sources", level="INFO") as logs:
             await self.start(connector)
             await wait_for(lambda: len(self.tokens_seen) >= 3)
         self.assertEqual(self.tokens_seen[0], "JWT geheim-token")
@@ -181,7 +181,7 @@ class ConnectorTests(unittest.IsolatedAsyncioTestCase):
 
         connector._wait = record
         connector.INITIAL_DELAY, connector.MAX_DELAY = 0.1, 0.2
-        with self.assertLogs("app", level="ERROR") as logs:
+        with self.assertLogs("sources", level="ERROR") as logs:
             await self.start(connector)
             await wait_for(lambda: len(waits) >= 4)
         self.assertEqual(self.state.status, "wachten op nieuwe poging")
@@ -206,7 +206,7 @@ class ConnectorTests(unittest.IsolatedAsyncioTestCase):
 
         _, port = await self.server(handler, process_request=refuse)
         settings, connector = self.make_connector(f"ws://127.0.0.1:{port}/")
-        with self.assertLogs("app", level="ERROR"):
+        with self.assertLogs("sources", level="ERROR"):
             await self.start(connector)
             await wait_for(lambda: self.state.status == "wachten op nieuwe poging")
         self.assertEqual(self.state.level, "error")
@@ -235,7 +235,7 @@ class ConnectorTests(unittest.IsolatedAsyncioTestCase):
 
         _, port = await self.server(handler)
         settings, connector = self.make_connector("", "")
-        with self.assertLogs("app", level="ERROR"):
+        with self.assertLogs("sources", level="ERROR"):
             await self.start(connector)
             await wait_for(lambda: self.state.status == "niet geconfigureerd")
         settings.set_url(f"ws://127.0.0.1:{port}/")
@@ -255,7 +255,7 @@ class ConnectorTests(unittest.IsolatedAsyncioTestCase):
 
         _, port = await self.server(handler)
         settings, connector = self.make_connector(f"ws://127.0.0.1:{port}/")
-        with self.assertLogs("app", level="INFO") as logs:
+        with self.assertLogs("sources", level="INFO") as logs:
             await self.start(connector)
             await wait_for(lambda: any("De wedstrijd is begonnen!" in l for l in logs.output))
         self.assertEqual(len(self.tokens_seen), 1)  # nog steeds dezelfde verbinding
@@ -301,7 +301,7 @@ class ConnectorTests(unittest.IsolatedAsyncioTestCase):
         settings, connector = self.make_connector(f"ws://127.0.0.1:{proxy_port}/")
         connector.PING_INTERVAL = connector.PING_TIMEOUT = 0.2
         connector.CLOSE_TIMEOUT = 0.2
-        with self.assertLogs("app", level="ERROR") as logs:
+        with self.assertLogs("sources", level="ERROR") as logs:
             await self.start(connector)
             await wait_for(lambda: self.state.status == "verbonden")
             proxy.frozen = True
@@ -322,7 +322,7 @@ class ConnectorTests(unittest.IsolatedAsyncioTestCase):
         _, port = await self.server(handler)
         settings, connector = self.make_connector(f"ws://127.0.0.1:{port}/")
         settings.goal_wait_seconds = 0.2  # de wachttijd uit de instellingen (webapp) wordt gebruikt
-        with self.assertLogs("app", level="INFO") as logs:
+        with self.assertLogs("sources", level="INFO") as logs:
             await self.start(connector)
             await wait_for(lambda: any("DOELPUNT Home FC!" in l for l in logs.output))
 

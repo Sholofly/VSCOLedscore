@@ -8,7 +8,7 @@ from pathlib import Path
 import app
 from settings import Settings
 from state import ConnectionState
-from app import MatchLifecycle, build_websocket_uri
+from sources.scoreboard import Connector, MatchLifecycle, build_websocket_uri
 
 
 class BuildWebsocketUriTests(unittest.TestCase):
@@ -434,26 +434,9 @@ class HashtagTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             settings = Settings(Path(folder) / "s.json")
             settings.set_hashtag("derby")
-            connector = app.Connector(settings, ConnectionState())
+            connector = Connector(settings, ConnectionState())
             lifecycle = connector._lifecycle_for("wss://example.test/")
             (message,) = self.start(lifecycle)
             self.assertTrue(message.endswith("#derby"), message)
             lifecycle.update(self.payload("VSCO'61", "VSW 1", started_at=START, ended_at=END, seconds=5400))
             self.assertEqual(settings.hashtag_override, "")  # vervallen na het einde
-
-    def test_scoreboard_end_during_an_away_match_keeps_the_own_hashtag(self):
-        # Regressie: tijdens een uitduel (bron tikkieterug) speelt thuis een ander team. Het
-        # eindsignaal op het scorebord mag de hashtag van de uitwedstrijd niet wissen.
-        with tempfile.TemporaryDirectory() as folder:
-            settings = Settings(Path(folder) / "s.json")
-            settings.set_hashtag("hatvsc2026")
-            allowed = [False]  # bron is tikkieterug
-            connector = app.Connector(settings, ConnectionState(), source_allowed=lambda: allowed[0])
-            lifecycle = connector._lifecycle_for("wss://example.test/")
-            self.start(lifecycle)
-            lifecycle.update(self.payload("VSCO'61 2", "Ander team", started_at=START, ended_at=END, seconds=5400))
-            self.assertEqual(settings.hashtag_override, "#hatvsc2026")
-            allowed[0] = True  # weer een thuiswedstrijd: dan wel wissen na het einde
-            lifecycle.update(self.payload("VSCO'61", "VSW 1", started_at=START, seconds=60))
-            lifecycle.update(self.payload("VSCO'61", "VSW 1", started_at=START, ended_at=END, seconds=5400))
-            self.assertEqual(settings.hashtag_override, "")

@@ -1,47 +1,28 @@
+"""Matchshare: wedstrijdinformatie delen.
+
+Start de webomgeving en de gekozen bron (zie `sources/`): het scorebord, Voetbalnederland
+of een andere geregistreerde bron. De berichten van de bron komen in de webomgeving,
+in de logging en als pushmelding.
+"""
+
 import asyncio
 import contextlib
-import json
 import logging
-import math
 import os
-import random
 import signal
-import time
 import traceback
-from collections.abc import Callable, Mapping
-from datetime import timedelta
+from collections.abc import Mapping
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Any
-from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 from dotenv import dotenv_values
-from websockets.asyncio.client import connect
-from websockets.exceptions import (
-    ConnectionClosedOK,
-    InvalidStatus,
-    WebSocketException,
-)
 
-from messages import DEFAULT_TEMPLATES, Message, default_hashtag, render_message
 from settings import Settings
-from state import ConnectionState, MemoryLogHandler, now as state_now
+from sources.scoreboard import build_websocket_uri, raw_logger, redact_token
+from state import ConnectionState, MemoryLogHandler
 
 LOG_FORMAT = "%(asctime)s %(levelname)s %(message)s"
 logger = logging.getLogger(__name__)
-raw_logger = logging.getLogger(f"{__name__}.raw")
-raw_logger.propagate = False  # ruwe berichten nooit naar de console
-
-GOAL_WAIT_SECONDS = 20.0  # standaard wachttijd op de doelpuntmaker (instelbaar in de webapp)
-MAX_MESSAGE_BYTES = 8 * 1024 * 1024
-
-
-def redact_token(message: str, token: str) -> str:
-    if not token:
-        return message
-    return message.replace(token, "[redacted]").replace(
-        quote(token, safe=""), "[redacted]"
-    )
 
 
 class TokenRedactingFilter(logging.Filter):
@@ -118,483 +99,14 @@ def setup_logging(settings: Settings, app_log: Path) -> MemoryLogHandler:
     return memory
 
 
-class MatchLifecycle:
-    def __init__(
-        self,
-        regular_minutes: int = 90,
-        templates: Mapping[str, str] | Callable[[], Mapping[str, str]] | None = None,
-        goal_wait: Callable[[], float] | None = None,
-        hashtag: Callable[[], str] | None = None,
-        on_match_end: Callable[[], None] | None = None,
-    ) -> None:
-        self.regular_minutes = regular_minutes
-        # Per doelpunt opgevraagd, zodat een wijziging in de webapp direct geldt.
-        self._goal_wait: Callable[[], float] = goal_wait or (lambda: GOAL_WAIT_SECONDS)
-        # Eigen hashtag voor deze wedstrijd (leeg = standaard); na het einde wordt die gewist.
-        self._hashtag: Callable[[], str] = hashtag or (lambda: "")
-        self._on_match_end: Callable[[], None] = on_match_end or (lambda: None)
-        if templates is None:
-            self._templates: Callable[[], Mapping[str, str]] = lambda: DEFAULT_TEMPLATES
-        elif callable(templates):
-            self._templates = templates
-        else:
-            self._templates = lambda: templates
-        self.initialized = False
-        self.started_at: str | None = None
-        self.ended_at: str | None = None
-        self.active = False
-        self.rest = False
-        self.score: tuple[Any, Any] | None = None
-        # Doelpuntmakers: (kant, positie, naam) -> foto-URL (of None)
-        self.scorers: dict[tuple[str, int, str], str | None] = {}
-        # Eigen doelpunt dat wacht op een doelpuntmaker: (context, deadline)
-        self.pending_goal: tuple[dict[str, Any], float] | None = None
-
-    @property
-    def next_deadline(self) -> float | None:
-        return self.pending_goal[1] if self.pending_goal else None
-
-    def _render(self, key: str, context: dict[str, Any]) -> list[Message]:
-        try:
-            text = render_message(self._templates(), key, context)
-        except Exception:  # een kapot sjabloon mag de verwerking niet stoppen
-            logger.exception("Sjabloon '%s' kon niet worden ingevuld", key)
-            text = render_message(DEFAULT_TEMPLATES, key, context)
-        return [Message(text, kind=key)] if text else []
-
-    def flush_pending(self) -> list[str]:
-        """Meld een wachtend doelpunt zonder doelpuntmaker."""
-        if self.pending_goal is None:
-            return []
-        context, _ = self.pending_goal
-        self.pending_goal = None
-        return self._render("goal_home_no_scorer", context)
-
-    def flush_expired(self, now: float | None = None) -> list[str]:
-        now = time.monotonic() if now is None else now
-        deadline = self.next_deadline
-        return self.flush_pending() if deadline is not None and now >= deadline else []
-
-    @staticmethod
-    def _score_changes(
-        previous: tuple[Any, Any] | None, current: tuple[Any, Any]
-    ) -> tuple[str | None, bool]:
-        """Geef (kant met hogere stand, of de stand ergens lager is geworden)."""
-        scored_side, decreased = None, False
-        if previous is None:
-            return scored_side, decreased
-        for side, old, new in zip(("home", "away"), previous, current):
-            if isinstance(old, int) and isinstance(new, int):
-                if new > old and scored_side is None:
-                    scored_side = side
-                decreased = decreased or new < old
-        return scored_side, decreased
-
-    def update(self, payload: dict[str, Any], now: float | None = None) -> list[str]:
-        now = time.monotonic() if now is None else now
-        if not isinstance(payload, dict):
-            return []
-        data = payload.get("scoreboard_data")
-        if not isinstance(data, dict):
-            return []
-
-        started_at = data.get("startedAt")
-        ended_at = data.get("endedAt")
-        is_active = bool(started_at) and not bool(ended_at)
-        is_rest = bool(data.get("rest"))
-        home, away = self._team_names(payload, data)
-        scoreboard = data.get("scoreboard")
-        scoreboard = scoreboard if isinstance(scoreboard, dict) else {}
-        score = (scoreboard.get("home"), scoreboard.get("away"))
-        context = self._context(home, away, score, self._minute_label(data))
-        scorers = self._scorers(data)
-        events: list[str] = []
-
-        if self.initialized:
-            started = is_active and (
-                not self.active or started_at != self.started_at
-            )
-            ended = bool(ended_at) and not bool(self.ended_at)
-            scored_side, decreased = self._score_changes(self.score, score)
-            if started or ended:
-                events.extend(self.flush_pending())
-            if decreased:
-                self.pending_goal = None  # scorecorrectie: doelpunt vervalt
-
-            if started:
-                events.extend(self._render("start", context))
-            if is_active and is_rest and not self.rest:
-                events.extend(self._render("rest", context))
-            if is_active and self.rest and not is_rest and not started:
-                events.extend(self._render("second_half", context))
-            if ended:
-                events.extend(self._end_messages(self._elapsed_seconds(data), score, context))
-                self._on_match_end()  # een eigen hashtag gold alleen voor deze wedstrijd
-            if is_active and not started and scored_side == "away":
-                events.extend(self._render("goal_away", context))
-            elif is_active and not started and scored_side == "home":
-                events.extend(self.flush_pending())
-                self.pending_goal = (context, now + self._goal_wait())
-            # Alleen de doelpuntmaker van de eigen (thuis)ploeg wordt gebruikt.
-            for key in sorted(scorers.keys() - self.scorers.keys()):
-                side, _, name = key
-                if side == "home" and self.pending_goal:
-                    goal_context, _ = self.pending_goal
-                    self.pending_goal = None
-                    events.extend(
-                        Message(text, scorers[key], "goal_home")
-                        for text in self._render("goal_home", {**goal_context, "speler": name})
-                    )
-
-        self.started_at = started_at
-        self.ended_at = ended_at
-        self.active = is_active
-        self.rest = is_rest
-        self.score = score
-        self.scorers = scorers
-        self.initialized = True
-        return events
-
-    def _context(
-        self, home: str, away: str, score: tuple[Any, Any], minute: str
-    ) -> dict[str, Any]:
-        home_score = "?" if score[0] is None else score[0]
-        away_score = "?" if score[1] is None else score[1]
-        return {
-            "minuut": minute,
-            "thuis": home,
-            "uit": away,
-            # Bij het scorebord speelt de eigen club altijd thuis.
-            "eigen": home,
-            "tegenstander": away,
-            "stand": f"{home_score}-{away_score}",
-            "thuis_score": home_score,
-            "uit_score": away_score,
-            "hashtag": self._hashtag() or default_hashtag(home, away),
-            "blessuretijd": 0,
-        }
-
-    def _end_messages(
-        self, seconds: Any, score: tuple[Any, Any], context: dict[str, Any]
-    ) -> list[str]:
-        extra = 0
-        if isinstance(seconds, bool) or not isinstance(seconds, (int, float)):
-            minute = "?"
-        else:
-            played = math.ceil(seconds / 60)  # 90:00 is 90, 92:01 is 90+3
-            extra = max(0, played - self.regular_minutes)
-            minute = str(min(played, self.regular_minutes))
-            if extra:
-                minute += f"+{extra}"
-        home_score, away_score = score
-        won = (
-            isinstance(home_score, int)
-            and isinstance(away_score, int)
-            and home_score > away_score
-        )
-        context = {**context, "minuut": minute, "blessuretijd": extra}
-        return self._render("end_win" if won else "end_other", context)
-
-    def _elapsed_seconds(self, data: dict[str, Any]) -> float | None:
-        """Gespeelde seconden. `time` begint elke helft opnieuw bij 0 (period 0/1)."""
-        seconds = data.get("time")
-        if isinstance(seconds, bool) or not isinstance(seconds, (int, float)):
-            return None
-        period = data.get("period")
-        second_half = isinstance(period, int) and not isinstance(period, bool) and period >= 1
-        return seconds + (self.regular_minutes * 30 if second_half else 0)
-
-    def _minute(self, data: dict[str, Any]) -> int | None:
-        """Speelminuut: 0:05 is minuut 1, 45:30 is minuut 46; bij rust de eindminuut."""
-        seconds = self._elapsed_seconds(data)
-        if seconds is None:
-            return None
-        if data.get("rest"):  # tijdens rust staat `time` op 0
-            period = data.get("period")
-            second_half = isinstance(period, int) and not isinstance(period, bool) and period >= 1
-            return self.regular_minutes // 2 * (2 if second_half else 1)
-        return int(seconds // 60) + 1
-
-    def _minute_label(self, data: dict[str, Any]) -> str:
-        """Minuut als tekst, met blessuretijd per helft: 45:30 in de eerste helft is "45+1",
-        in de tweede helft is na 90:00 "90+1" (zoals bij het eindbericht)."""
-        minute = self._minute(data)
-        if minute is None:
-            return "?"
-        period = data.get("period")
-        second_half = isinstance(period, int) and not isinstance(period, bool) and period >= 1
-        limit = self.regular_minutes if second_half else self.regular_minutes // 2
-        return f"{limit}+{minute - limit}" if minute > limit else str(minute)
-
-    @staticmethod
-    def _scorers(data: dict[str, Any]) -> dict[tuple[str, int, str], str | None]:
-        """Doelpuntmakers als (kant, positie, naam) -> foto-URL; de lijst kan null bevatten.
-
-        De foto is `goalImage` (doelpuntfoto), anders `image` (pasfoto), alleen als http(s)-URL.
-        """
-        raw = data.get("scorers")
-        result: dict[tuple[str, int, str], str | None] = {}
-        if not isinstance(raw, dict):
-            return result
-        for side in ("home", "away"):
-            entries = raw.get(side)
-            if not isinstance(entries, list):
-                continue
-            for index, entry in enumerate(entries):
-                player = entry.get("player") if isinstance(entry, dict) else None
-                name = player.get("name") if isinstance(player, dict) else None
-                if name:
-                    photo = None
-                    for field in ("goalImage", "image"):
-                        value = player.get(field)
-                        if isinstance(value, str) and value.startswith(("https://", "http://")):
-                            photo = value
-                            break
-                    result[(side, index, str(name))] = photo
-        return result
-
-    @staticmethod
-    def _team_names(payload: dict[str, Any], data: dict[str, Any]) -> tuple[str, str]:
-        names = {
-            team.get("id"): team.get("scoreboard_name") or team.get("name")
-            for team in payload.get("teams", [])
-            if isinstance(team, dict)
-        }
-        team_ids = data.get("teams")
-        team_ids = team_ids if isinstance(team_ids, dict) else {}
-        return (
-            str(names.get(team_ids.get("home")) or "Thuis"),
-            str(names.get(team_ids.get("away")) or "Uit"),
-        )
-
-
-def build_websocket_uri(endpoint: str, token: str) -> str:
-    parts = urlsplit(endpoint)
-    if parts.scheme not in {"ws", "wss"} or not parts.netloc:
-        raise ValueError("WS_URL must be a valid ws:// or wss:// URL.")
-    if not token.strip():
-        raise ValueError("WS_TOKEN is empty. Set it in the .env file.")
-
-    query = [(key, value) for key, value in parse_qsl(parts.query) if key != "token"]
-    query.append(("token", token))
-    return urlunsplit(parts._replace(query=urlencode(query, quote_via=quote)))
-
-
-class Connector:
-    """Houdt de verbinding open: foutafhandeling, reconnect met oplopende wachttijd."""
-
-    INITIAL_DELAY = 1.0
-    MAX_DELAY = 60.0
-    STABLE_SECONDS = 30.0  # zo lang verbonden = wachttijd weer terug naar het begin
-    # Elke PING_INTERVAL seconden een ping; zonder antwoord binnen PING_TIMEOUT geldt de
-    # verbinding als verbroken. Zo valt een weggevallen internetverbinding binnen ~20 s op
-    # (zonder ping merkt een TCP-verbinding dat soms pas na minuten).
-    PING_INTERVAL = 10.0
-    PING_TIMEOUT = 10.0
-    # Zonder internet komt er ook geen nette afsluiting van de server: niet lang wachten
-    # (standaard 10 s), anders blijft de status nog die tijd op "verbonden" staan.
-    CLOSE_TIMEOUT = 2.0
-
-    def __init__(
-        self,
-        settings: Settings,
-        state: ConnectionState,
-        regular_minutes: int = 90,
-        connect_func: Callable[..., Any] = connect,
-        notifier: Any = None,
-        source_allowed: Callable[[], bool] = lambda: True,
-    ) -> None:
-        self.settings = settings
-        self.state = state
-        # Krijgt elk wedstrijdbericht met notify(tekst, sleutel), bv. voor pushmeldingen.
-        self.notifier = notifier
-        # Mag het scorebord nu berichten leveren? Niet tijdens een uitduel: dan kan er
-        # thuis een ander team op het veld staan (tikkieterug levert dan de berichten).
-        self.source_allowed = source_allowed
-        self.regular_minutes = regular_minutes
-        self._connect = connect_func
-        self._lifecycle: MatchLifecycle | None = None
-        self._lifecycle_url = ""
-        self._connected_at: float | None = None
-
-    def _lifecycle_for(self, url: str) -> MatchLifecycle:
-        # Bij een nieuwe URL begint de beginsituatie opnieuw; bij een reconnect
-        # blijft de status bewaard, zodat gemiste wijzigingen alsnog worden gemeld.
-        if self._lifecycle is None or self._lifecycle_url != url:
-            self._lifecycle = MatchLifecycle(
-                self.regular_minutes,
-                lambda: self.settings.templates,
-                goal_wait=lambda: self.settings.goal_wait_seconds,
-                hashtag=lambda: self.settings.hashtag_override,
-                # Alleen wissen als het scorebord nu de bron is: tijdens een uitduel kan
-                # thuis een ander team spelen, en dat eindsignaal hoort niet bij de
-                # wedstrijd waarvoor de eigen hashtag is ingesteld.
-                on_match_end=lambda: self.source_allowed() and self.settings.clear_hashtag(),
-            )
-            self._lifecycle_url = url
-        return self._lifecycle
-
-    async def _wait(self, timeout: float | None) -> bool:
-        """Wacht tot de timeout of tot URL/token wijzigt. Geeft True bij een wijziging."""
-        try:
-            await asyncio.wait_for(self.settings.connection_changed.wait(), timeout)
-        except TimeoutError:
-            return False
-        return True
-
-    def _publish(self, events: list[str]) -> None:
-        """Berichten van het scorebord: alleen als het scorebord nu de bron is."""
-        if events and not self.source_allowed():
-            for event in events:
-                logger.info("Scorebord genegeerd (uitwedstrijd, bron is tikkieterug): %s", event)
-            return
-        self.publish_events(events)
-
-    def publish_events(self, events: list[str]) -> None:
-        """Berichten publiceren: log, lijst in de webomgeving en pushmeldingen."""
-        for event in events:
-            logger.info("%s", event)
-            key = self.state.add_message(event, getattr(event, "image", None))
-            if self.notifier is not None:
-                try:
-                    self.notifier.notify(str(event), key, getattr(event, "kind", None))
-                except Exception:  # meldingen mogen de verbinding nooit stoppen
-                    logger.exception("Pushmelding kon niet worden ingepland")
-
-    async def run(self) -> None:
-        delay = self.INITIAL_DELAY
-        while True:
-            self.settings.connection_changed.clear()
-            url, token = self.settings.url, self.settings.token
-            try:
-                uri = build_websocket_uri(url, token)
-            except ValueError:
-                detail = "URL of token ontbreekt. Vul ze in via de webomgeving."
-                self.state.set("niet geconfigureerd", "error", detail)
-                logger.error("Niet verbonden: %s", detail)
-                await self._wait(None)
-                delay = self.INITIAL_DELAY
-                continue
-
-            lifecycle = self._lifecycle_for(url)
-            self.state.attempt += 1
-            self.state.set("verbinden", "warn")
-            self._connected_at = None
-            outcome, error_text, auth_failed = "closed", "", False
-            try:
-                outcome = await self._session(uri, token, lifecycle)
-            except asyncio.CancelledError:
-                self._publish(lifecycle.flush_pending())
-                raise
-            except InvalidStatus as error:
-                code = error.response.status_code
-                auth_failed = code in (401, 403)
-                error_text = (
-                    f"Server weigerde de verbinding (HTTP {code}). "
-                    + ("Het token is ongeldig of verlopen." if auth_failed else "")
-                ).strip()
-            except (OSError, TimeoutError, WebSocketException) as error:
-                error_text = redact_token(f"{type(error).__name__}: {error}", token)
-            except Exception as error:  # onverwacht: nooit de lus laten stoppen
-                logger.exception("Onverwachte fout in de verbinding")
-                error_text = redact_token(f"{type(error).__name__}: {error}", token)
-            self._publish(lifecycle.flush_pending())
-
-            if outcome == "changed":
-                logger.info("URL of token gewijzigd; opnieuw verbinden")
-                delay = self.INITIAL_DELAY
-                continue
-
-            uptime = 0.0 if self._connected_at is None else time.monotonic() - self._connected_at
-            if uptime >= self.STABLE_SECONDS:
-                delay = self.INITIAL_DELAY
-            wait = self.MAX_DELAY if auth_failed else delay
-            wait *= random.uniform(0.9, 1.1)
-
-            if error_text:
-                self.state.record_error(error_text)
-                logger.error("Verbinding mislukt: %s", error_text)
-            else:
-                logger.warning("Verbinding door de server gesloten")
-            self.state.set("wachten op nieuwe poging", "error" if auth_failed else "warn", error_text)
-            self.state.next_retry_at = state_now() + timedelta(seconds=wait)
-            logger.info("Opnieuw verbinden over %.0f seconden", wait)
-            changed = await self._wait(wait)
-            delay = self.INITIAL_DELAY if changed else min(delay * 2, self.MAX_DELAY)
-
-    async def _session(self, uri: str, token: str, lifecycle: MatchLifecycle) -> str:
-        """Eén verbinding. Geeft 'changed' bij gewijzigde instellingen, 'closed' bij sluiten."""
-        async with self._connect(
-            uri,
-            max_size=MAX_MESSAGE_BYTES,
-            ping_interval=self.PING_INTERVAL,
-            ping_timeout=self.PING_TIMEOUT,
-            close_timeout=self.CLOSE_TIMEOUT,
-        ) as websocket:
-            self._connected_at = time.monotonic()
-            self.state.set("verbonden", "ok")
-            logger.info("Verbonden met het scorebord")
-            recv_task: asyncio.Future | None = None
-            change_task = asyncio.ensure_future(self.settings.connection_changed.wait())
-            try:
-                while True:
-                    if recv_task is None:
-                        recv_task = asyncio.ensure_future(websocket.recv())
-                    deadline = lifecycle.next_deadline
-                    timeout = None if deadline is None else max(0.0, deadline - time.monotonic())
-                    done, _ = await asyncio.wait(
-                        {recv_task, change_task},
-                        timeout=timeout,
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                    if not done:
-                        self._publish(lifecycle.flush_expired())
-                        continue
-                    if change_task in done:
-                        return "changed"
-                    task, recv_task = recv_task, None
-                    try:
-                        message = task.result()
-                    except ConnectionClosedOK:
-                        return "closed"
-                    self._handle(message, token, lifecycle)
-            finally:
-                helpers = [task for task in (recv_task, change_task) if task is not None]
-                for task in helpers:
-                    task.cancel()
-                # gather met return_exceptions vangt de fouten van de hulptaken op, maar laat
-                # een stopsignaal voor deze taak zelf door. contextlib.suppress(CancelledError)
-                # zou dat stopsignaal inslikken, waarna de lus eindeloos doorgaat.
-                await asyncio.gather(*helpers, return_exceptions=True)
-
-    def _handle(self, message: str | bytes, token: str, lifecycle: MatchLifecycle) -> None:
-        text = message if isinstance(message, str) else message.decode("utf-8", "replace")
-        raw_logger.info("%s", redact_token(text, token))
-        self.state.last_message_at = state_now()
-        self.state.messages_received += 1
-        try:
-            payload = json.loads(text)
-        except json.JSONDecodeError as error:
-            logger.warning(
-                "Could not parse websocket message for match status: %s", error
-            )
-            return
-        try:
-            events = lifecycle.update(payload)
-        except Exception:  # een vreemd bericht mag de verbinding niet stoppen
-            logger.exception("Fout bij het verwerken van een bericht")
-            return
-        self._publish(events)
-
-
 def read_setting(config: Mapping[str, str | None], name: str, default: str = "") -> str:
     return os.getenv(name) or config.get(name) or default
 
 
 async def main() -> None:
     from push import DEFAULT_SUBJECT, PushSender, PushStore, load_vapid, validate_subject
-    from settings import DEFAULT_TIKKIE_URL
-    from tikkie import TikkieWatcher
+    from settings import DEFAULT_VOETBALNEDERLAND_URL
+    from sources import Publisher, SourceManager, build_sources
     from web import load_session_secret, start_web
 
     config = dotenv_values()
@@ -604,7 +116,7 @@ async def main() -> None:
         data_dir / "settings.json",
         read_setting(config, "WS_URL"),
         read_setting(config, "WS_TOKEN"),
-        tikkie_url=read_setting(config, "TIKKIETERUG_URL", DEFAULT_TIKKIE_URL),
+        voetbalnederland_url=read_setting(config, "VOETBALNEDERLAND_URL", DEFAULT_VOETBALNEDERLAND_URL),
     )
     memory_log = setup_logging(settings, log_dir / "app.log")
     setup_raw_log(read_setting(config, "RAW_LOG_FILE", str(log_dir / "websocket-raw.log")))
@@ -621,7 +133,8 @@ async def main() -> None:
         raise ValueError("SESSION_DAYS must be a whole number between 1 and 365.")
     if not password:
         # Zonder webomgeving kan niets de configuratie herstellen: direct controleren.
-        build_websocket_uri(settings.url, settings.token)
+        if settings.source == "scoreboard":
+            build_websocket_uri(settings.url, settings.token)
         logger.warning("WEB_PASSWORD is niet ingesteld: de webomgeving staat uit")
 
     state = ConnectionState()
@@ -634,12 +147,8 @@ async def main() -> None:
             # Pushdiensten eisen een contactadres: mailto:... of https://domein (zonder pad).
             subject=validate_subject(vapid, read_setting(config, "VAPID_SUBJECT", DEFAULT_SUBJECT)),
         )
-    watcher: TikkieWatcher | None = None
-    connector = Connector(
-        settings, state, int(minutes), notifier=pusher,
-        source_allowed=lambda: watcher is None or watcher.active_source() == "scoreboard",
-    )
-    watcher = TikkieWatcher(settings, connector.publish_events)
+    publisher = Publisher(state, notifier=pusher)
+    manager = SourceManager(settings, build_sources(settings, state, publisher.publish, int(minutes)))
     web_runner = None
     if password:
         web_runner = await start_web(
@@ -650,7 +159,7 @@ async def main() -> None:
             memory_log=memory_log,
             session_secret=load_session_secret(data_dir / "session_secret"),
             push=pusher,
-            tikkie=watcher,
+            sources=manager,
             # Tweede login: alleen berichten delen en eigen instellingen (leeg = uit).
             share_user=read_setting(config, "SHARE_USER", "gebruiker"),
             share_password=read_setting(config, "SHARE_PASSWORD"),
@@ -667,15 +176,14 @@ async def main() -> None:
         with contextlib.suppress(NotImplementedError, RuntimeError):  # o.a. Windows
             loop.add_signal_handler(sig, stop.set)
 
-    runner = asyncio.create_task(connector.run())
-    tikkie_runner = asyncio.create_task(watcher.run())
+    runner = asyncio.create_task(manager.run())
     stopper = asyncio.create_task(stop.wait())
     try:
-        await asyncio.wait({runner, tikkie_runner, stopper}, return_when=asyncio.FIRST_COMPLETED)
+        await asyncio.wait({runner, stopper}, return_when=asyncio.FIRST_COMPLETED)
     finally:
-        for task in (runner, tikkie_runner, stopper):
+        for task in (runner, stopper):
             task.cancel()
-        await asyncio.gather(runner, tikkie_runner, return_exceptions=True)
+        await asyncio.gather(runner, return_exceptions=True)
         if web_runner is not None:
             await web_runner.cleanup()
         logger.info("Gestopt")

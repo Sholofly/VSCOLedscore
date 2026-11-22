@@ -1,15 +1,13 @@
-"""Uitwedstrijden via tikkieterug (amateurvoetbal-uitslagen van voetbalnederland.nl).
+"""Bron: Voetbalnederland (uitslagen en live-standen van het amateurvoetbal).
 
-Bij een thuiswedstrijd komt alles van het scorebord. Bij een uitwedstrijd volgt de
-app de wedstrijd van het gekozen team via tikkieterug: het programma van vandaag
+Volgt de wedstrijd van vandaag van het gekozen team, thuis of uit: het programma
 wordt af en toe opgehaald, en vanaf een kwartier voor de aftrap wordt de wedstrijd
 elke `poll_seconds` bevraagd. Statuswijzigingen en nieuwe doelpunten worden
-berichten, met dezelfde sjablonen als bij het scorebord.
+berichten, met dezelfde sjablonen als bij het scorebord. Je club is het gekozen team.
 
-De app gebruikt de openbare JSON-API van tikkieterug (dezelfde die de website
-gebruikt; geen sleutel nodig): `/clubs?search=`, `/clubs/{id}/programma`,
-`/clubs/{id}/uitslagen` en `/matches/{id}?source=`. De MCP-koppeling op
-`/mcp` is alleen voor Claude.
+De gegevens komen van een openbare JSON-API (adres instelbaar, geen sleutel):
+`/clubs?search=`, `/clubs/{id}/programma`, `/clubs/{id}/uitslagen` en
+`/matches/{id}?source=`.
 """
 
 import asyncio
@@ -26,6 +24,8 @@ from messages import DEFAULT_TEMPLATES, Message, default_hashtag, render_message
 from settings import Settings
 from state import now as state_now
 
+from .base import Source, StatusRow, fmt_time
+
 logger = logging.getLogger(__name__)
 
 REFRESH_SECONDS = 600.0  # zo vaak het programma van vandaag opnieuw ophalen
@@ -38,12 +38,12 @@ ERROR_RETRY_SECONDS = 60.0
 REQUEST_TIMEOUT = 20.0
 
 
-class TikkieError(Exception):
-    """tikkieterug gaf een fout of was niet bereikbaar."""
+class VoetbalnederlandError(Exception):
+    """De Voetbalnederland-bron gaf een fout of was niet bereikbaar."""
 
 
 def clean_name(value: Any) -> str:
-    """Namen uit tikkieterug bevatten soms dubbele spaties ("Boaz  Bruijnes")."""
+    """Namen uit Voetbalnederland bevatten soms dubbele spaties ("Boaz  Bruijnes")."""
     return " ".join(str(value or "").split())
 
 
@@ -51,27 +51,27 @@ def known_player(name: str) -> bool:
     return bool(name) and not name.lower().startswith("onbekend")
 
 
-class TikkieClient:
-    """De openbare JSON-API van tikkieterug."""
+class VoetbalnederlandClient:
+    """De openbare JSON-API met de gegevens van Voetbalnederland."""
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
 
     async def get(self, path: str) -> Any:
-        url = self.settings.tikkie_url.rstrip("/") + path
+        url = self.settings.voetbalnederland_url.rstrip("/") + path
         try:
             async with ClientSession(timeout=ClientTimeout(total=REQUEST_TIMEOUT)) as session:
                 async with session.get(url, headers={"Accept": "application/json"}) as response:
                     if response.status != 200:
-                        raise TikkieError(f"tikkieterug gaf HTTP {response.status}.")
+                        raise VoetbalnederlandError(f"De Voetbalnederland-bron gaf HTTP {response.status}.")
                     # Een onbekend pad geeft de website (HTML) met status 200: dat is geen antwoord.
                     if "json" not in response.headers.get("Content-Type", ""):
-                        raise TikkieError("Onverwacht antwoord van tikkieterug (geen JSON); klopt het adres?")
+                        raise VoetbalnederlandError("Onverwacht antwoord van de Voetbalnederland-bron (geen JSON); klopt het adres?")
                     return await response.json()
-        except TikkieError:
+        except VoetbalnederlandError:
             raise
         except (ClientError, ContentTypeError, TimeoutError, OSError, ValueError) as error:
-            raise TikkieError(f"tikkieterug niet bereikbaar ({type(error).__name__})") from None
+            raise VoetbalnederlandError(f"De Voetbalnederland-bron is niet bereikbaar ({type(error).__name__})") from None
 
     async def search_clubs(self, query: str) -> list[dict]:
         result = await self.get(f"/clubs?search={quote(query)}&active=true")
@@ -93,7 +93,7 @@ class TikkieClient:
     async def match(self, match_id: int, source: int) -> dict:
         result = await self.get(f"/matches/{int(match_id)}?source={int(source)}")
         if not isinstance(result, dict):
-            raise TikkieError("Onverwacht antwoord van tikkieterug.")
+            raise VoetbalnederlandError("Onverwacht antwoord van de Voetbalnederland-bron.")
         return result
 
 
@@ -101,12 +101,12 @@ def own_side(match: Mapping[str, Any], team_id: int) -> str:
     return "home" if match.get("homeClubId") == team_id else "away"
 
 
-class TikkieLifecycle:
+class VoetbalnederlandLifecycle:
     """Maakt van opeenvolgende momentopnames van één wedstrijd de berichten.
 
     Net als bij het scorebord is de eerste momentopname de beginsituatie (geen
     berichten achteraf). Begin, rust, tweede helft en einde hebben geen minuut;
-    een doelpunt heeft de minuut uit tikkieterug.
+    een doelpunt heeft de minuut uit Voetbalnederland.
     """
 
     def __init__(
@@ -240,10 +240,9 @@ class TikkieLifecycle:
 
 
 @dataclass
-class TikkieState:
+class VoetbalnederlandState:
     status: str = "niet ingesteld"
     level: str = "warn"  # ok | warn | error
-    source: str = "scoreboard"  # bron van vandaag: scoreboard | tikkieterug
     match_text: str = ""
     last_poll_at: datetime | None = None
     last_error: str = ""
@@ -266,8 +265,15 @@ def describe(match: Mapping[str, Any]) -> str:
     )
 
 
-class TikkieWatcher:
-    """Volgt het programma van het team en, bij een uitduel, de wedstrijd zelf."""
+class VoetbalnederlandSource(Source):
+    """Volgt het programma van het gekozen team en de wedstrijd van vandaag (thuis of uit)."""
+
+    id = "voetbalnederland"
+    label = "Voetbalnederland"
+    description = (
+        "Standen van Voetbalnederland, bijgewerkt door vrijwilligers. Je club is het team dat je "
+        "hieronder kiest (thuis of uit). Begin, rust en einde komen zonder minuut."
+    )
 
     def __init__(
         self,
@@ -276,34 +282,47 @@ class TikkieWatcher:
         client: Any = None,
         now: Callable[[], datetime] = datetime.now,
     ) -> None:
+        super().__init__(publish)
         self.settings = settings
-        self.publish = publish
-        self.client = client or TikkieClient(settings)
+        self.client = client or VoetbalnederlandClient(settings)
         self.now = now
-        self.state = TikkieState()
-        self.match: dict | None = None  # de wedstrijd van vandaag, of None
+        self.state = VoetbalnederlandState()
+        self._match: dict | None = None  # de wedstrijd van vandaag, of None
         self._match_checked: tuple[datetime, int | None] | None = None
-        self._lifecycle: TikkieLifecycle | None = None
+        self._lifecycle: VoetbalnederlandLifecycle | None = None
         self._lifecycle_match: int | None = None
         self._finished: set[int] = set()
 
-    # ------------------------------------------------------------- bronkeuze
-    def active_source(self) -> str:
-        """Welke bron de berichten levert: "scoreboard" of "tikkieterug"."""
-        mode = self.settings.source_mode
-        if mode == "scoreboard" or not self.settings.tikkie_ready:
-            return "scoreboard"
-        if mode == "tikkieterug":
-            return "tikkieterug"
-        match = self.match
-        if match is not None and own_side(match, self.settings.team_id) == "away":
-            return "tikkieterug"
-        return "scoreboard"
+    @property
+    def match(self) -> dict | None:
+        return self._match
+
+    @match.setter
+    def match(self, value: dict | None) -> None:
+        self._match = value
+
+    # ------------------------------------------------------------- weergave
+    def led(self) -> tuple[str, str]:
+        return self.state.level, self.state.status
+
+    def status_rows(self) -> list[StatusRow]:
+        t = self.state
+        error = t.last_error or "-"
+        if t.last_error:
+            error += f" ({fmt_time(t.last_error_at)})"
+        team = self.settings.team_name or (str(self.settings.team_id) if self.settings.team_id else "-")
+        return [
+            ("Status", t.status, t.level),
+            ("Team", team, None),
+            ("Wedstrijd vandaag", t.match_text or "-", None),
+            ("Laatst bevraagd", fmt_time(t.last_poll_at), None),
+            ("Laatste fout", error, None),
+        ]
 
     # ------------------------------------------------------------- lus
     async def _wait(self, seconds: float | None) -> bool:
         try:
-            await asyncio.wait_for(self.settings.tikkie_changed.wait(), seconds)
+            await asyncio.wait_for(self.settings.voetbalnederland_changed.wait(), seconds)
         except TimeoutError:
             return False
         return True
@@ -327,10 +346,10 @@ class TikkieWatcher:
         self.match = await self.client.today_match(team, now.date())
         self._match_checked = (now, team)
 
-    def _lifecycle_for(self, match: Mapping[str, Any]) -> TikkieLifecycle:
+    def _lifecycle_for(self, match: Mapping[str, Any]) -> VoetbalnederlandLifecycle:
         match_id = match.get("matchId")
         if self._lifecycle is None or self._lifecycle_match != match_id:
-            self._lifecycle = TikkieLifecycle(
+            self._lifecycle = VoetbalnederlandLifecycle(
                 self.settings.team_id,
                 lambda: self.settings.templates,
                 lambda: self.settings.club_name,
@@ -342,28 +361,23 @@ class TikkieWatcher:
 
     async def step(self) -> float | None:
         """Eén ronde; geeft terug hoe lang er gewacht moet worden (None = tot een wijziging)."""
-        if not self.settings.tikkie_ready:
+        if not self.settings.voetbalnederland_ready:
             self.match = None
-            self.state.source = "scoreboard"
             self.state.set("niet ingesteld (kies een team)", "warn")
             return None
         try:
             await self._refresh_match(force=False)
-        except TikkieError as error:
+        except VoetbalnederlandError as error:
             self.state.record_error(str(error))
             self.state.set("fout bij ophalen programma", "error")
-            logger.warning("tikkieterug: %s", error)
+            logger.warning("Voetbalnederland: %s", error)
             return ERROR_RETRY_SECONDS
-        self.state.source = self.active_source()
         match = self.match
         if match is None:
             self.state.match_text = ""
             self.state.set("geen wedstrijd vandaag", "ok")
             return MAX_SLEEP_SECONDS
         self.state.match_text = describe(match)
-        if self.state.source != "tikkieterug":
-            self.state.set("thuiswedstrijd: het scorebord levert de berichten", "ok")
-            return MAX_SLEEP_SECONDS
         if match.get("matchId") in self._finished:
             self.state.set("wedstrijd afgelopen", "ok")
             return MAX_SLEEP_SECONDS
@@ -374,10 +388,10 @@ class TikkieWatcher:
             return max(1.0, min(MAX_SLEEP_SECONDS, wait))
         try:
             detail = await self.client.match(match["matchId"], match.get("source", 1))
-        except (TikkieError, KeyError) as error:
+        except (VoetbalnederlandError, KeyError) as error:
             self.state.record_error(str(error))
             self.state.set("fout bij volgen wedstrijd", "error")
-            logger.warning("tikkieterug: %s", error)
+            logger.warning("Voetbalnederland: %s", error)
             return min(ERROR_RETRY_SECONDS, self.settings.poll_seconds * 2)
         detail = {**match, **detail}
         self.publish(self._lifecycle_for(detail).update(detail))
@@ -386,19 +400,22 @@ class TikkieWatcher:
             self._finished.add(match.get("matchId"))
             self.state.set("wedstrijd afgelopen", "ok")
             return MAX_SLEEP_SECONDS
-        self.state.set("volgt de uitwedstrijd", "ok")
+        self.state.set("volgt de wedstrijd", "ok")
         return float(self.settings.poll_seconds)
 
     async def run(self) -> None:
-        while True:
-            self.settings.tikkie_changed.clear()
-            try:
-                wait = await self.step()
-            except asyncio.CancelledError:
-                raise
-            except Exception:  # nooit de lus laten stoppen
-                logger.exception("Onverwachte fout bij tikkieterug")
-                self.state.set("onverwachte fout", "error")
-                wait = ERROR_RETRY_SECONDS
-            if await self._wait(wait):
-                self._match_checked = None  # instellingen gewijzigd: programma opnieuw ophalen
+        try:
+            while True:
+                self.settings.voetbalnederland_changed.clear()
+                try:
+                    wait = await self.step()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:  # nooit de lus laten stoppen
+                    logger.exception("Onverwachte fout bij Voetbalnederland")
+                    self.state.set("onverwachte fout", "error")
+                    wait = ERROR_RETRY_SECONDS
+                if await self._wait(wait):
+                    self._match_checked = None  # instellingen gewijzigd: programma opnieuw ophalen
+        finally:
+            self.state.set("gestopt (andere bron gekozen)", "warn")

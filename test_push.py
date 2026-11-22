@@ -8,7 +8,7 @@ from aiohttp import BasicAuth
 from aiohttp.test_utils import AioHTTPTestCase
 from pywebpush import WebPushException
 
-from app import Connector
+from sources import Publisher
 from push import (
     MAX_SUBSCRIPTIONS,
     PRESENT_SECONDS,
@@ -287,9 +287,9 @@ class ConnectorNotifyTests(unittest.TestCase):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
         state = ConnectionState()
-        connector = Connector(Settings(Path(folder.name) / "s.json"), state, notifier=Notifier())
-        with self.assertLogs("app", level="INFO"):
-            connector._publish(["eerste", "tweede"])
+        publisher = Publisher(state, notifier=Notifier())
+        with self.assertLogs("sources", level="INFO"):
+            publisher.publish(["eerste", "tweede"])
         self.assertEqual(calls, [(m.text, m.key) for m in state.messages])
 
     def test_the_kind_of_message_is_passed_on(self):
@@ -303,9 +303,9 @@ class ConnectorNotifyTests(unittest.TestCase):
 
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
-        connector = Connector(Settings(Path(folder.name) / "s.json"), ConnectionState(), notifier=Notifier())
-        with self.assertLogs("app", level="INFO"):
-            connector._publish([Message("start", kind="start"), Message("doelpunt", "https://x.test/a.jpg", "goal_home")])
+        publisher = Publisher(ConnectionState(), notifier=Notifier())
+        with self.assertLogs("sources", level="INFO"):
+            publisher.publish([Message("start", kind="start"), Message("doelpunt", "https://x.test/a.jpg", "goal_home")])
         self.assertEqual(kinds, ["start", "goal_home"])
 
     def test_a_failing_notifier_does_not_stop_publishing(self):
@@ -316,9 +316,9 @@ class ConnectorNotifyTests(unittest.TestCase):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
         state = ConnectionState()
-        connector = Connector(Settings(Path(folder.name) / "s.json"), state, notifier=Broken())
-        with self.assertLogs("app", level="ERROR"):
-            connector._publish(["bericht"])
+        publisher = Publisher(state, notifier=Broken())
+        with self.assertLogs("sources", level="ERROR"):
+            publisher.publish(["bericht"])
         self.assertEqual(len(state.messages), 1)
 
 

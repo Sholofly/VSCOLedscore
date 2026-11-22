@@ -1,4 +1,4 @@
-"""Wijzigbare instellingen (URL, token, sjablonen), bewaard in data/settings.json.
+"""Wijzigbare instellingen van Matchshare (bron, verbinding, sjablonen), bewaard in data/settings.json.
 
 Waarden uit .env zijn de beginwaarden; wat via de webomgeving is opgeslagen
 heeft voorrang. Het token wordt nooit teruggegeven aan de webomgeving.
@@ -22,13 +22,9 @@ MAX_TOKEN_LENGTH = 4096
 DEFAULT_GOAL_WAIT_SECONDS = 20
 MAX_GOAL_WAIT_SECONDS = 300
 MAX_URL_LENGTH = 2048
-# Uitwedstrijden via tikkieterug
-DEFAULT_TIKKIE_URL = "https://tikkieterug.sholofly.nl"
-SOURCE_MODES = {
-    "auto": "Automatisch: thuis het scorebord, uit tikkieterug",
-    "scoreboard": "Altijd het scorebord",
-    "tikkieterug": "Altijd tikkieterug",
-}
+# Bron Voetbalnederland: adres van de openbare API met de gegevens
+DEFAULT_VOETBALNEDERLAND_URL = "https://tikkieterug.sholofly.nl"
+DEFAULT_SOURCE = "scoreboard"
 DEFAULT_POLL_SECONDS = 30
 MIN_POLL_SECONDS = 10
 MAX_POLL_SECONDS = 300
@@ -61,11 +57,11 @@ def validate_goal_wait(value: object) -> int:
     return seconds
 
 
-def validate_tikkie_url(url: str) -> str:
+def validate_https_url(url: str) -> str:
     url = url.strip()
     parts = urlsplit(url)
     if len(url) > MAX_URL_LENGTH or any(ord(c) < 33 for c in url) or parts.scheme != "https" or not parts.netloc:
-        raise ValueError("Het adres van tikkieterug moet met https:// beginnen en mag geen spaties bevatten.")
+        raise ValueError("Het adres moet met https:// beginnen en mag geen spaties bevatten.")
     return url
 
 
@@ -112,20 +108,22 @@ class Settings:
         path: Path,
         url: str = "",
         token: str = "",
-        tikkie_url: str = DEFAULT_TIKKIE_URL,
+        voetbalnederland_url: str = DEFAULT_VOETBALNEDERLAND_URL,
     ) -> None:
         self.path = Path(path)
         self.url = url.strip()
         self.token = token.strip()
-        # Uitwedstrijden (tikkieterug, openbare API zonder sleutel).
-        self.tikkie_url = (tikkie_url or DEFAULT_TIKKIE_URL).strip()
+        # De actieve bron (id uit sources.build_sources); wisselen zet source_changed.
+        self.source = DEFAULT_SOURCE
+        self.source_changed = asyncio.Event()
+        # Bron Voetbalnederland (openbare API zonder sleutel).
+        self.voetbalnederland_url = (voetbalnederland_url or DEFAULT_VOETBALNEDERLAND_URL).strip()
         self.team_id: int | None = None
         self.team_name = ""
-        self.club_name = ""  # eigen clubnaam in berichten bij uitduels (leeg = naam uit tikkieterug)
-        self.source_mode = "auto"
+        self.club_name = ""  # eigen clubnaam in berichten (leeg = naam uit Voetbalnederland)
         self.poll_seconds = DEFAULT_POLL_SECONDS
-        # Wordt gezet als iets van tikkieterug verandert, zodat de watcher opnieuw kijkt.
-        self.tikkie_changed = asyncio.Event()
+        # Wordt gezet als iets van de Voetbalnederland-bron verandert, zodat die opnieuw kijkt.
+        self.voetbalnederland_changed = asyncio.Event()
         self.template_overrides: dict[str, str] = {}
         # Eigen hashtag voor één wedstrijd (de lopende, anders de eerstvolgende); leeg = de
         # standaard uit de eerste drie letters van thuis- en uitploeg. Vervalt na het einde.
@@ -159,7 +157,10 @@ class Settings:
                 self.goal_wait_seconds = validate_goal_wait(raw["goal_wait_seconds"])
             except ValueError:
                 logger.error("Ongeldige wachttijd in het instellingenbestand; standaard gebruikt.")
-        self._load_tikkie(raw)
+        source = raw.get("source")
+        if isinstance(source, str) and source.isidentifier():
+            self.source = source
+        self._load_voetbalnederland(raw)
         if raw.get("hashtag_override"):
             try:
                 self.hashtag_override = validate_hashtag(raw["hashtag_override"])
@@ -175,7 +176,7 @@ class Settings:
                 and validate_template(key, value) is None
             }
 
-    def _load_tikkie(self, raw: dict) -> None:
+    def _load_voetbalnederland(self, raw: dict) -> None:
         def take(name, check):
             if name in raw and raw[name] not in (None, ""):
                 try:
@@ -184,14 +185,14 @@ class Settings:
                     logger.error("Ongeldige waarde voor %s in het instellingenbestand; genegeerd.", name)
             return None
 
-        self.tikkie_url = take("tikkie_url", lambda v: validate_tikkie_url(str(v))) or self.tikkie_url
+        self.voetbalnederland_url = (
+            take("voetbalnederland_url", lambda v: validate_https_url(str(v))) or self.voetbalnederland_url
+        )
         team_id = raw.get("team_id")
         if isinstance(team_id, int) and not isinstance(team_id, bool) and team_id > 0:
             self.team_id = team_id
         self.team_name = take("team_name", validate_name) or ""
         self.club_name = take("club_name", validate_name) or ""
-        if raw.get("source_mode") in SOURCE_MODES:
-            self.source_mode = raw["source_mode"]
         poll = take("poll_seconds", validate_poll_seconds)
         if poll is not None:
             self.poll_seconds = poll
@@ -205,11 +206,11 @@ class Settings:
             "templates": self.template_overrides,
             "hashtag_override": self.hashtag_override,
             "goal_wait_seconds": self.goal_wait_seconds,
-            "tikkie_url": self.tikkie_url,
+            "source": self.source,
+            "voetbalnederland_url": self.voetbalnederland_url,
             "team_id": self.team_id,
             "team_name": self.team_name,
             "club_name": self.club_name,
-            "source_mode": self.source_mode,
             "poll_seconds": self.poll_seconds,
         }
         handle, temp_name = tempfile.mkstemp(dir=self.path.parent, suffix=".tmp")
@@ -243,19 +244,29 @@ class Settings:
             self.connection_changed.set()
 
     @property
-    def tikkie_ready(self) -> bool:
-        """Kan tikkieterug gebruikt worden (team gekozen)?"""
+    def voetbalnederland_ready(self) -> bool:
+        """Kan de Voetbalnederland-bron gebruikt worden (team gekozen)?"""
         return bool(self.team_id)
 
-    def _tikkie_update(self, **values) -> None:
+    def set_source(self, source_id: str) -> None:
+        """Kies de actieve bron. De webomgeving controleert of de bron bestaat."""
+        source_id = str(source_id).strip()
+        if not source_id.isidentifier():
+            raise ValueError("Onbekende bron.")
+        if source_id != self.source:
+            self.source = source_id
+            self._save()
+            self.source_changed.set()
+
+    def _voetbalnederland_update(self, **values) -> None:
         if any(getattr(self, name) != value for name, value in values.items()):
             for name, value in values.items():
                 setattr(self, name, value)
             self._save()
-            self.tikkie_changed.set()
+            self.voetbalnederland_changed.set()
 
-    def set_tikkie_url(self, url: str) -> None:
-        self._tikkie_update(tikkie_url=validate_tikkie_url(url))
+    def set_voetbalnederland_url(self, url: str) -> None:
+        self._voetbalnederland_update(voetbalnederland_url=validate_https_url(url))
 
     def set_team(self, team_id: object, name: str) -> None:
         try:
@@ -264,18 +275,13 @@ class Settings:
             raise ValueError("Ongeldig team.") from None
         if number <= 0:
             raise ValueError("Ongeldig team.")
-        self._tikkie_update(team_id=number, team_name=validate_name(name))
+        self._voetbalnederland_update(team_id=number, team_name=validate_name(name))
 
     def set_club_name(self, name: str) -> None:
-        self._tikkie_update(club_name=validate_name(name))
-
-    def set_source_mode(self, mode: str) -> None:
-        if mode not in SOURCE_MODES:
-            raise ValueError("Onbekende keuze voor de bron.")
-        self._tikkie_update(source_mode=mode)
+        self._voetbalnederland_update(club_name=validate_name(name))
 
     def set_poll_seconds(self, value: object) -> None:
-        self._tikkie_update(poll_seconds=validate_poll_seconds(value))
+        self._voetbalnederland_update(poll_seconds=validate_poll_seconds(value))
 
     def set_goal_wait(self, value: object) -> None:
         """Geldt vanaf het volgende doelpunt; de verbinding hoeft niet opnieuw op."""

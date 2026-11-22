@@ -1,8 +1,10 @@
 # CLAUDE.md
 
-Python 3.13-app die verbindt met de VSCO-scorebord-websocket (ledscores),
-wedstrijdgebeurtenissen herkent en die als berichten toont in een webomgeving
-voor de telefoon (met een Delen-knop en optioneel de foto van de doelpuntmaker). Draait in Docker op een Synology-NAS.
+**Matchshare**: Python 3.13-app die wedstrijdinformatie uit een gekozen **bron**
+(Scorebord via websocket, Voetbalnederland via REST; uitbreidbaar) omzet in
+berichten om te delen, in een webomgeving voor de telefoon (Delen-knop,
+pushmeldingen, optioneel de foto van de doelpuntmaker). Draait in Docker op een
+Synology-NAS.
 Gebruikersdocumentatie staat in [README.md](README.md).
 
 ## Afspraken met de gebruiker
@@ -11,6 +13,9 @@ Gebruikersdocumentatie staat in [README.md](README.md).
 - **Toon nooit het token of `WEB_PASSWORD`**, schrijf ze niet in code, tests of
   commits en **wijzig `.env` niet**. Controleer zo nodig alleen óf iets is
   ingesteld (bv. `grep -c '^WEB_PASSWORD=.' .env`), nooit de waarde.
+- Gebruik nergens de naam van de API-server achter Voetbalnederland in namen,
+  teksten of beschrijvingen; alleen het standaardadres
+  (`DEFAULT_VOETBALNEDERLAND_URL`) mag hem bevatten.
 - Geen X/Twitter-koppeling of -login in de app: posten gaat via de intent-link
   en het deelmenu van de telefoon.
 - Houd wijzigingen klein, voeg gerichte tests toe bij nieuw gedrag en draai de
@@ -22,11 +27,14 @@ Gebruikersdocumentatie staat in [README.md](README.md).
 
 | Bestand | Inhoud |
 |---|---|
-| [app.py](app.py) | `MatchLifecycle` (berichten uit statusovergangen), `Connector` (verbinding, reconnect), logging, `main()` |
+| [app.py](app.py) | Logging (`TokenRedactingFilter`, ruwe log), `.env` lezen, `main()` (bouwt bronnen, `SourceManager`, web) |
+| [sources/base.py](sources/base.py) | `Source` (basisklasse: `id`, `label`, `description`, `run`, `led`, `status_rows`), `Publisher` (log + berichten + push) |
+| [sources/__init__.py](sources/__init__.py) | `build_sources` (register, volgorde keuzelijst), `SourceManager` (laat alleen de gekozen bron draaien, wisselt op `settings.source_changed`) |
+| [sources/scoreboard.py](sources/scoreboard.py) | Bron Scorebord: `MatchLifecycle` (berichten uit statusovergangen), `Connector` (verbinding, reconnect), `ScoreboardSource` |
+| [sources/voetbalnederland.py](sources/voetbalnederland.py) | Bron Voetbalnederland: client, `VoetbalnederlandLifecycle` (momentopnames → berichten), `VoetbalnederlandSource` (programma, pollen) |
 | [messages.py](messages.py) | Sjablonen: standaardteksten, aanduidingen (`{minuut}` ...), validatie, `Message` (tekst + foto-URL) |
-| [settings.py](settings.py) | URL/token/sjablonen in `data/settings.json` (heeft voorrang op `.env`), atomair opgeslagen |
+| [settings.py](settings.py) | Bron, URL/token, team, sjablonen in `data/settings.json` (heeft voorrang op `.env`), atomair opgeslagen |
 | [push.py](push.py) | Web Push: VAPID-sleutels, aangemelde apparaten (alleen bekende pushdiensten), versturen, "startpagina open" |
-| [tikkie.py](tikkie.py) | Uitwedstrijden via tikkieterug (openbare REST-API): client, `TikkieLifecycle` (momentopnames → berichten), `TikkieWatcher` (programma, pollen, bronkeuze) |
 | [state.py](state.py) | `ConnectionState` (status + laatste wedstrijdberichten), `MemoryLogHandler` |
 | [web.py](web.py) | aiohttp-webomgeving: pagina's, inloggen/sessies, live-updates, foto-doorgifte, PWA |
 | `static/` | App-iconen (PNG) |
@@ -65,29 +73,37 @@ Elk bericht is de volledige status (~175 KB JSON). Relevant in `scoreboard_data`
   De lijst kan `null` bevatten. **De doelpuntmaker komt ~5 s ná de standwijziging,
   in een apart bericht**; zonder gekozen speler komt er niets.
 
-## tikkieterug (uitwedstrijden)
+## Bronnen
 
-- De app gebruikt de **openbare REST-API** (geen sleutel; spec:
-  https://tikkieterug.sholofly.nl/openapi/v1.json): `/clubs?search=&active=true`,
+- Er draait precies één bron: `Settings.source` (pagina App, blok Bron), uitgevoerd
+  door `SourceManager`. Een onbekende keuze valt terug op `scoreboard`. Een
+  gecrashte bron wordt gelogd en na `RESTART_DELAY` opnieuw gestart.
+- "Je club": bij Scorebord de thuisploeg op het scorebord; bij Voetbalnederland
+  het gekozen team (`Settings.team_id`), thuis of uit.
+- **Een bron toevoegen:** subklasse van `Source` in `sources/`, registreren in
+  `build_sources`, eigen instellingen in `settings.py` plus een blok in `web.py`
+  (en `BLOCK_FOR_MESSAGE`). Berichten via `self.publish([...])`; zet tests in
+  `test_sources.py`-stijl.
+
+## Voetbalnederland
+
+- **Openbare REST-API** (geen sleutel): `/clubs?search=&active=true`,
   `/clubs/{id}/programma`, `/clubs/{id}/uitslagen`, `/matches/{id}?source=`.
   Een onbekend pad geeft de website (HTML, status 200): de client controleert
   daarom op JSON. Status: scheduled/live/halftime/ended/suspended/cancelled;
   `goals` met minute/player/side/teamScore.
-- `/mcp` op dezelfde server is de MCP-koppeling voor Claude (met `X-Api-Key`
-  `TIKKIETERUG_MCP_KEY`); die hoort niet in de app. Claude Code moet na `setx`
-  volledig herstarten om de variabele te zien.
+- `.mcp.json` / `/mcp` is alleen een koppeling voor Claude en hoort niet in de app.
+  Claude Code moet na `setx` volledig herstarten om de variabele te zien.
 - Namen hebben soms dubbele spaties; "Onbekende Speler" = geen maker. Minuten zijn
   door vrijwilligers ingevuld (blessuretijd vaak als 45 of 90).
-- Bronkeuze (`Settings.source_mode`): auto = thuis scorebord, uit tikkieterug;
-  tijdens een uitduel worden scorebordberichten genegeerd (`Connector.source_allowed`).
-- Uitduel-berichten: begin/rust/tweede helft/einde zonder minuut (`'{minuut} ` valt
+- Berichten: begin/rust/tweede helft/einde zonder minuut (`'{minuut} ` valt
   weg), afsluiting in echte volgorde, `{eigen}`/`{tegenstander}` voor de eigen club.
 
 ## Gedrag dat bewust zo is
 
 - De eerste ontvangen status is de beginsituatie: geen meldingen achteraf.
 - Eigen doelpunt wacht tot 20 s op de doelpuntmaker (instelbaar op de pagina
-  Verbinding, `Settings.goal_wait_seconds`; per doelpunt opgevraagd) en
+  App, blok Scorebord, `Settings.goal_wait_seconds`; per doelpunt opgevraagd) en
   wordt dan als één bericht gemeld; doelpunt tegenstander direct.
 - Stand omlaag = correctie: wachtend doelpunt vervalt, geen melding.
 - Minuten met blessuretijd per helft: eerste helft boven 45 wordt `45+n`, tweede
@@ -99,10 +115,8 @@ Elk bericht is de volledige status (~175 KB JSON). Relevant in `scoreboard_data`
 - `{hashtag}` = `default_hashtag(thuis, uit)` (`messages.py`): eerste drie letters van
   thuis- en uitploeg, klein en zonder cijfers/leestekens (`#vscvsw`; uit bij Hattem
   wordt `#hatvsc`, thuisploeg voorop). Geen vaste `vsc` meer. `Settings.hashtag_override`
-  (pagina App, blok Hashtag) geldt voor één wedstrijd en wordt door beide lifecycles
+  (pagina App, blok Hashtag) geldt voor één wedstrijd en wordt door de actieve bron
   gewist na het einde (`on_match_end` / `on_end`); hij wordt per bericht opgevraagd.
-  Het scorebord wist hem alleen als het scorebord de bron is (`source_allowed`): tijdens
-  een uitduel kan thuis een ander team spelen.
 - Gedeelde tekst (Delen en de X-link) eindigt met een enter (`share_text`), zodat X
   na een hashtag aan het eind niet het hashtag-venster opent. Het bericht zelf niet.
 
@@ -112,7 +126,7 @@ Elk bericht is de volledige status (~175 KB JSON). Relevant in `scoreboard_data`
   SameSite=Lax, 30 dagen); HTTP Basic blijft voor scripts. Openbaar zijn alleen
   `/login`, `/health`, `/manifest.webmanifest`, `/sw.js` en `/static/`.
 - CSRF-token op alle formulieren; CSP met een nonce per pagina; alles escapen.
-- Het token staat alleen op de pagina Verbinding (verborgen veld met oog-icoon)
+- Het token staat alleen in het blok Scorebord (verborgen veld met oog-icoon)
   en wordt uit alle logregels gehaald (`TokenRedactingFilter`).
 - `/photo/<id>` geeft alleen foto's door die in een wedstrijdbericht voorkomen
   (geen willekeurige URL's ophalen).
@@ -127,8 +141,8 @@ Elk bericht is de volledige status (~175 KB JSON). Relevant in `scoreboard_data`
   zonder venster (`msedge --headless=new --screenshot`); Edge heeft een minimale
   vensterbreedte van ~500 px, dus zet de pagina zelf op `width:390px`.
 - Pagina's: `/` berichten + statuslampje, `/me` (Mijn instellingen: meldingen,
-  uitloggen), `/app` (alleen beheerder: blokken Status, Verbinding, Doelpunten,
-  Sjablonen, Logging), `/share/<sleutel>` (deelscherm uit een pushmelding).
+  uitloggen), `/app` (alleen beheerder: blokken Status, Bron, Scorebord,
+  Voetbalnederland, Hashtag, Sjablonen, Logging), `/share/<sleutel>` (deelscherm uit een pushmelding).
   Live-updates via `/logs/data` (JSON; voor een gebruiker zonder logregels en
   statustabel). Oude adressen (`/status`, `/settings`, `/templates`, `/logs`)
   sturen door naar `/app#blok`; de POST-adressen `/settings` en `/templates` bestaan nog.
@@ -171,7 +185,7 @@ Elk bericht is de volledige status (~175 KB JSON). Relevant in `scoreboard_data`
 - Gedrag in een echte browser controleren kan met Edge zonder venster plus het
   DevTools-protocol (`--remote-debugging-port`, `Runtime.evaluate` via websockets).
 - Slaapstand: Docker Desktop (VM) staat stil als de pc slaapt; lange asyncio-timers lopen
-  daarna nog door en missen zo de aftrap. De `TikkieWatcher` slaapt daarom hooguit
+  daarna nog door en missen zo de aftrap. `VoetbalnederlandSource` slaapt daarom hooguit
   `MAX_SLEEP_SECONDS` (60 s) en rekent op de echte klok (`now()`), niet op de loop-klok.
 - Op de NAS kan `./logs` onschrijfbaar zijn (uid 1000); de app logt dan alleen
   naar console en geheugen, en de webomgeving valt daarop terug.

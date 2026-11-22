@@ -15,7 +15,8 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app.py messages.py push.py settings.py state.py tikkie.py web.py ./
+COPY app.py messages.py push.py settings.py state.py web.py ./
+COPY sources/ ./sources/
 COPY static/ ./static/
 RUN mkdir -p /app/data /app/logs && chown appuser:appuser /app/data /app/logs
 

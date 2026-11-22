@@ -61,7 +61,7 @@ class WebTests(AioHTTPTestCase):
                 self.assertNotIn("supergeheim", body, path)
             self.assertIn("default-src 'none'", resp.headers["Content-Security-Policy"])
             self.assertEqual(resp.headers["Cache-Control"], "no-store")
-        for old, block in (("/status", "status"), ("/settings", "verbinding"),
+        for old, block in (("/status", "status"), ("/settings", "scorebord"),
                            ("/templates", "sjablonen"), ("/logs", "logging")):
             resp = await self.client.get(old, headers=AUTH, allow_redirects=False)
             self.assertEqual((resp.status, resp.headers["Location"]), (303, f"/app#{block}"), old)
@@ -651,23 +651,23 @@ class RoleTests(AioHTTPTestCase):
     async def test_admin_sees_app_with_blocks_and_saving_returns_to_the_block(self):
         await self.login("admin", "wachtwoord")
         app_page = await (await self.client.get("/app")).text()
-        for block in ("status", "verbinding", "doelpunten", "sjablonen", "logging"):
+        for block in ("status", "bron", "scorebord", "voetbalnederland", "hashtag", "sjablonen", "logging"):
             self.assertIn(f'<details class="block" id="{block}"', app_page)
         self.assertIn("gelden voor iedereen", app_page)
         resp = await self.client.post(
             "/settings", data={"csrf": self.app["csrf"], "action": "goal_wait", "goal_wait": "30"},
             allow_redirects=False,
         )
-        self.assertEqual(resp.headers["Location"], "/app?msg=goal_wait#doelpunten")
+        self.assertEqual(resp.headers["Location"], "/app?msg=goal_wait#scorebord")
         after = await (await self.client.get("/app?msg=goal_wait")).text()
-        self.assertIn('<details class="block" id="doelpunten" open>', after)
+        self.assertIn('<details class="block" id="scorebord" open>', after)
         self.assertIn("Wachttijd opgeslagen", after)
         bad = await self.client.post(
             "/settings", data={"csrf": self.app["csrf"], "action": "url", "url": "http://x"}
         )
         body = await bad.text()
         self.assertEqual(bad.status, 400)
-        self.assertIn('<details class="block" id="verbinding" open>', body)
+        self.assertIn('<details class="block" id="scorebord" open>', body)
 
     async def test_user_login_is_off_without_share_password(self):
         self.app["share_password"] = ""

@@ -38,7 +38,7 @@ ALLOWED_PUSH_HOSTS = (
 MAX_SUBSCRIPTIONS = 20
 PRESENT_SECONDS = 6.0  # zo lang na de laatste update geldt de startpagina als "open"
 TTL_SECONDS = 600  # een melding die na 10 minuten nog niet is afgeleverd, vervalt
-TITLE = "VSCO Scorebord"
+TITLE = "Matchshare"
 # Icoon per soort bericht: een bal bij doelpunten, anders een fluitje. Het icoon is
 # gekleurd; de badge (statusbalk van Android) is een witte vorm op transparant, want
 # Android gebruikt alleen de vorm.
