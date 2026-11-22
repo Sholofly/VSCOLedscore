@@ -1,4 +1,4 @@
-"""Matchshare: wedstrijdinformatie delen.
+"""MatchShareNL: wedstrijdinformatie delen.
 
 Start de webomgeving en de gekozen bron (zie `sources/`): het scorebord, Voetbalnederland
 of een andere geregistreerde bron. De berichten van de bron komen in de webomgeving,

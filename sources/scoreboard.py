@@ -529,8 +529,8 @@ def token_text(token: str) -> str:
 
 class ScoreboardSource(Source):
     id = "scoreboard"
-    label = "Scorebord"
-    description = "Live via het scorebord (websocket). Je club is de thuisploeg op het scorebord."
+    label = "LED Scores"
+    description = "Live via het scorebord van LED Scores (websocket). Je club is de thuisploeg op het scorebord."
 
     def __init__(
         self,

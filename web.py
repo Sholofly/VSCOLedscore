@@ -1,11 +1,11 @@
-"""Webomgeving van Matchshare: berichten delen, status, bronnen, sjablonen en logging.
+"""Webomgeving van MatchShareNL: berichten delen, status, bronnen, sjablonen en logging.
 
 Beveiliging: alles behalve de inlogpagina, /health en de app-bestanden (manifest,
 service worker, iconen) vereist inloggen. Dat gaat via de inlogpagina met een
 ondertekend sessiecookie (HttpOnly, SameSite=Lax, standaard 30 dagen), of voor
 scripts via HTTP Basic. Formulieren hebben een CSRF-token, scripts zijn alleen
 met een nonce per pagina toegestaan en alle uitvoer wordt ge-escaped. Het token
-staat alleen onder Connectie > Scorebord (verborgen tot je het oog-icoon gebruikt).
+staat alleen onder Connectie > LED Scores (verborgen tot je het oog-icoon gebruikt).
 """
 
 import asyncio
@@ -77,15 +77,18 @@ MESSAGES = {
 # Kleuren voor donker: bij "Systeem" als het apparaat donker staat, en altijd bij "Donker".
 DARK_VARS = (
     "--bg:#14171b;--card:#1d2127;--text:#e6e9ed;--muted:#9aa5b1;--line:#2f353d;--accent:#6ea8ff;"
-    "--on-accent:#0b1526;--ok:#4cc26a;--warn:#e0b341;--err:#ff7b72;--code:#262b32;color-scheme:dark"
+    "--on-accent:#0b1526;--ok:#4cc26a;--warn:#e0b341;--err:#ff7b72;--code:#262b32;color-scheme:dark;"
+    "--watermark:url(/static/watermark-dark.svg)"
 )
 CSS = """
 :root{--bg:#f6f7f9;--card:#fff;--text:#1b1f24;--muted:#5b6670;--line:#d9dee4;
---accent:#1f5fbf;--on-accent:#fff;--ok:#1a7f37;--warn:#9a6700;--err:#c4302b;--code:#eef1f4;color-scheme:light}
+--accent:#1f5fbf;--on-accent:#fff;--ok:#1a7f37;--warn:#9a6700;--err:#c4302b;--code:#eef1f4;color-scheme:light;
+--watermark:url(/static/watermark-light.svg)}
 @media (prefers-color-scheme:dark){:root:not([data-theme=light]){@@DARK@@}}
 :root[data-theme=dark]{@@DARK@@}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,sans-serif}
+body::before{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;background:var(--watermark) center 45%/min(92vw,560px) no-repeat}
 .logout{margin-top:4px}
 .app-footer{position:fixed;left:0;right:0;bottom:0;z-index:20;background:var(--card);border-top:1px solid var(--line);
 padding-bottom:env(safe-area-inset-bottom)}
@@ -107,6 +110,7 @@ border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,.25);padding:4px 0;display:f
 .login{max-width:24rem}
 .titlebar{display:flex;align-items:center;justify-content:space-between;gap:8px 12px;flex-wrap:wrap;margin:8px 0 12px}
 .titlebar h1{margin:0}
+.brand-plate{background:#14171b;border-radius:10px;padding:14px 16px;margin:0 0 12px;display:flex;justify-content:center}.brand-plate img{max-width:100%;height:auto;display:block}
 .titlebar-end{display:flex;align-items:center;gap:8px;margin-left:auto}
 body.base main,body.sheet main{padding-bottom:84px}
 body.sheet .titlebar{position:sticky;top:0;z-index:10;background:var(--bg);margin:0 -16px 12px;padding:8px 16px;
@@ -338,7 +342,7 @@ def footer_html(role: str | None, active: str) -> str:
         '<footer class="app-footer"><div class="app-footer-inner">'
         f'<a href="{BASE_PATH}" class="brand-logo" aria-label="Naar de berichten">'
         '<img src="/static/logo.svg" alt="" width="36" height="36"></a>'
-        '<span class="brand-name">Matchshare</span>'
+        '<span class="brand-name">MatchShareNL</span>'
         f"{menu_html(role, active)}</div></footer>"
     )
 
@@ -400,7 +404,7 @@ APP_HEAD = (
     '<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">'
     '<meta name="apple-mobile-web-app-capable" content="yes">'
     '<meta name="mobile-web-app-capable" content="yes">'
-    '<meta name="apple-mobile-web-app-title" content="Matchshare">'
+    '<meta name="apple-mobile-web-app-title" content="MatchShareNL">'
 )
 
 
@@ -430,7 +434,7 @@ def page(
     document = (
         f'<!doctype html><html lang="nl"{theme_attr}><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">'
-        f"{APP_HEAD}{meta}<title>{esc(title)} - Matchshare</title><style>{CSS}</style></head>"
+        f"{APP_HEAD}{meta}<title>{esc(title)} - MatchShareNL</title><style>{CSS}</style></head>"
         f'<body{body_class}><main><div class="titlebar"><h1>{esc(title)}</h1>'
         f'<div class="titlebar-end">{aside}{close}</div></div>{body}</main>'
         f"{nav}{script_tag}</body></html>"
@@ -842,16 +846,24 @@ def logging_html(request: web.Request) -> str:
 # Instellingenblok per bron: bron-id -> (blok-id, titel, inhoud(request, **fouten)).
 # Alleen het blok van de gekozen bron staat op de pagina (of een blok met een fout of
 # melding, bv. na een POST van een script).
+# Logo van LED Scores (lokale kopie: de CSP laat alleen afbeeldingen van de eigen server toe).
+# Het logo heeft witte delen, daarom staat het op een donker plaatje (ook in licht).
+LEDSCORE_LOGO = (
+    '<div class="brand-plate"><img src="/static/ledscores-logo.png" alt="LED Scores" width="300" height="59"></div>'
+)
+
+
 def scoreboard_panel(request: web.Request, connection: dict | None = None, goal_wait: dict | None = None) -> str:
     return (
-        connection_html(request, **(connection or {}))
+        LEDSCORE_LOGO
+        + connection_html(request, **(connection or {}))
         + "<h3>Wachten op de doelpuntmaker</h3>"
         + goal_wait_html(request, **(goal_wait or {}))
     )
 
 
 SOURCE_PANELS: dict[str, tuple[str, str, Callable[..., str]]] = {
-    "scoreboard": ("scorebord", "Scorebord", scoreboard_panel),
+    "scoreboard": ("scorebord", "LED Scores", scoreboard_panel),
     "voetbalnederland": ("voetbalnederland", "Voetbalnederland", voetbalnederland_html),
 }
 
@@ -1447,7 +1459,7 @@ SERVICE_WORKER_JS = """// Service worker: maakt de app installeerbaar. Er wordt 
 const OFFLINE = '<!doctype html><html lang="nl"><meta charset="utf-8">'
   + '<meta name="viewport" content="width=device-width,initial-scale=1"><title>Geen verbinding</title>'
   + '<body style="font:16px system-ui,sans-serif;padding:24px">'
-  + '<h1>Geen verbinding</h1><p>Matchshare is niet bereikbaar. Controleer je netwerk en probeer het opnieuw.</p>';
+  + '<h1>Geen verbinding</h1><p>MatchShareNL is niet bereikbaar. Controleer je netwerk en probeer het opnieuw.</p>';
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()));
 self.addEventListener('fetch', (event) => {
@@ -1459,7 +1471,7 @@ self.addEventListener('fetch', (event) => {
 self.addEventListener('push', (event) => {
   let data = {};
   try { data = event.data ? event.data.json() : {}; } catch (e) { data = {body: event.data ? event.data.text() : ''}; }
-  event.waitUntil(self.registration.showNotification(data.title || 'Matchshare', {
+  event.waitUntil(self.registration.showNotification(data.title || 'MatchShareNL', {
     body: data.body || '', tag: data.tag || undefined,
     icon: data.icon || '/static/icon-192.png', badge: data.badge || '/static/badge-logo.png',
     data: {url: data.url || '/'},
@@ -1480,8 +1492,8 @@ self.addEventListener('notificationclick', (event) => {
 
 async def manifest(request: web.Request) -> web.Response:
     data = {
-        "name": "Matchshare",
-        "short_name": "Matchshare",
+        "name": "MatchShareNL",
+        "short_name": "MatchShareNL",
         "description": "Wedstrijdberichten van het VSCO-scorebord, klaar om te delen.",
         "lang": "nl",
         "start_url": "/",

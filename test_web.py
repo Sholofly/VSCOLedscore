@@ -698,7 +698,7 @@ class RoleTests(AioHTTPTestCase):
             self.assertNotIn(f'id="{block}"', app_page)
         # Hashtag en berichtteksten staan samen op de pagina Sjablonen, allebei open.
         templates = await (await self.client.get("/sjablonen")).text()
-        self.assertIn("<title>Sjablonen - Matchshare</title>", templates)
+        self.assertIn("<title>Sjablonen - MatchShareNL</title>", templates)
         self.assertIn('<details class="block" id="hashtag" open><summary>Hashtag</summary>', templates)
         self.assertIn('<details class="block" id="sjablonen" open><summary>Berichtteksten</summary>', templates)
         self.assertIn('class="close"', templates)
@@ -719,11 +719,11 @@ class RoleTests(AioHTTPTestCase):
         # Footer: logo links (naar Berichten), naam in het midden, menu rechts.
         self.assertIn('<footer class="app-footer"><div class="app-footer-inner"><a href="/" class="brand-logo"', home)
         self.assertIn('<img src="/static/logo.svg"', home)
-        self.assertIn('<span class="brand-name">Matchshare</span><details class="app-menu" id="menu">', home)
+        self.assertIn('<span class="brand-name">MatchShareNL</span><details class="app-menu" id="menu">', home)
         self.assertIn('<nav class="menu-list" aria-label="Menu"><a href="/app">Connectie</a>'
                       '<a href="/sjablonen">Sjablonen</a><hr>'
                       '<a href="/pushmeldingen">Pushmeldingen</a><a href="/account">Account</a></nav>', home)
-        self.assertIn("<title>Connectie - Matchshare</title>", app_page)
+        self.assertIn("<title>Connectie - MatchShareNL</title>", app_page)
         self.assertIn("gelden voor iedereen", app_page)
         resp = await self.client.post(
             "/settings", data={"csrf": self.app["csrf"], "action": "goal_wait", "goal_wait": "30"},
@@ -788,13 +788,31 @@ class InstallableAppTests(AioHTTPTestCase):
         maskable = [icon["src"] for icon in data["icons"] if icon["purpose"] == "maskable"]
         self.assertEqual(maskable, ["/static/icon-maskable-512.png"])
 
+    async def test_logo_in_relief_on_the_background_for_light_and_dark(self):
+        page = await (await self.client.get("/login")).text()
+        self.assertIn("body::before{", page)
+        self.assertIn("--watermark:url(/static/watermark-light.svg)", page)
+        self.assertIn("--watermark:url(/static/watermark-dark.svg)", page)
+        for name in ("watermark-light.svg", "watermark-dark.svg"):
+            resp = await self.client.get(f"/static/{name}")  # openbaar, ook op de inlogpagina
+            self.assertEqual((resp.status, resp.content_type), (200, "image/svg+xml"), name)
+            self.assertIn("Pictogrammers, Apache 2.0", await resp.text())
+
+    async def test_ledscore_block_shows_their_logo_from_our_own_server(self):
+        page = await (await self.client.get("/app", headers=AUTH)).text()
+        self.assertIn('<summary>LED Scores</summary><div class="block-body"><div class="brand-plate">'
+                      '<img src="/static/ledscores-logo.png" alt="LED Scores"', page)
+        self.assertNotIn("ledscores.nl/wp-content", page)  # niet extern laden (CSP en privacy)
+        resp = await self.client.get("/static/ledscores-logo.png")
+        self.assertEqual((resp.status, resp.content_type), (200, "image/png"))
+
     async def test_logo_is_an_svg_favicon(self):
         page = await (await self.client.get("/login")).text()
         self.assertIn('<link rel="icon" href="/static/logo.svg" type="image/svg+xml">', page)
         resp = await self.client.get("/static/logo.svg")
         self.assertEqual((resp.status, resp.content_type), (200, "image/svg+xml"))
         svg = await resp.text()
-        self.assertIn("<title>Matchshare</title>", svg)
+        self.assertIn("<title>MatchShareNL</title>", svg)
         self.assertIn("Pictogrammers, Apache 2.0", svg)  # herkomst van de MDI-iconen
 
     async def test_service_worker_is_public_and_stores_nothing(self):

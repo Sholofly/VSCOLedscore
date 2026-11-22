@@ -1,6 +1,6 @@
-# Matchshare
+# MatchShareNL
 
-Matchshare maakt van wedstrijdinformatie kant-en-klare berichten om te delen:
+MatchShareNL maakt van wedstrijdinformatie kant-en-klare berichten om te delen:
 aftrap, doelpunten (met doelpuntmaker en foto), rust, tweede helft en einde. De
 informatie komt van een **bron** die je kiest: het **scorebord** van de club of
 **Voetbalnederland**; er kunnen later bronnen bij komen. De berichten verschijnen
@@ -22,7 +22,7 @@ SHARE_USER=gebruiker
 SHARE_PASSWORD=<ander-wachtwoord>
 ```
 
-- `WS_URL` en `WS_TOKEN` (de bron Scorebord) zijn beginwaarden. Wat je later in de webomgeving
+- `WS_URL` en `WS_TOKEN` (de bron LED Scores) zijn beginwaarden. Wat je later in de webomgeving
   opslaat, wordt bewaard in `data/settings.json` (in Docker: het volume
   `scorebord-data`) en **heeft voorrang** op `.env`. Wijzig je daarna het token
   in `.env`, dan merk je daar niets van: gebruik dan de webomgeving.
@@ -74,7 +74,7 @@ Bijwerken na een nieuwe versie:
 git pull && docker compose pull && docker compose up -d
 ```
 
-- **Eenmalig na de naamswijziging naar Matchshare:** de service heet nu
+- **Eenmalig na de naamswijziging naar MatchShareNL:** de service heet nu
   `matchshare` (was `websocket-logger`). Gebruik één keer
   `docker compose up -d --remove-orphans`, zodat de oude container verdwijnt.
   Het volume `scorebord-data` houdt bewust zijn naam: je instellingen, sessies
@@ -171,10 +171,10 @@ per pagina toegestaan en alle uitvoer wordt ge-escaped.
   Uitklapbare blokken, elk met een eigen opslaanknop; van de bronnen zie je
   alleen het blok van de gekozen bron:
   - **Bron en club** (staat bovenaan en open): kies de bron en je club en sla
-    ze samen op met Opslaan. Bij Scorebord ligt de club vast (de thuisploeg);
+    ze samen op met Opslaan. Bij LED Scores ligt de club vast (de thuisploeg);
     bij Voetbalnederland typ je een clubnaam en tik je de club aan in de
     resultaten die tijdens het typen verschijnen.
-  - **Scorebord:** URL en token, en de wachttijd op de doelpuntmaker (standaard
+  - **LED Scores:** het logo van LED Scores, URL en token, en de wachttijd op de doelpuntmaker (standaard
     20 seconden, 0 = niet wachten). Het token staat verborgen in het veld en
     maak je zichtbaar met het oog-icoon; het staat alleen hier. Een nieuwe URL
     of een nieuw token bouwt de verbinding direct opnieuw op. De URL mag geen
@@ -202,7 +202,7 @@ Er draait altijd precies één bron: de bron die je kiest onder Connectie > Bron
 andere bron kiezen stopt de vorige direct. De berichten, sjablonen, hashtag,
 meldingen en de Delen-knop werken voor elke bron hetzelfde.
 
-- **Scorebord:** live via de websocket van het scorebord. Je club is de
+- **LED Scores:** live via de websocket van het scorebord van LED Scores. Je club is de
   thuisploeg op het scorebord. Elk bericht heeft een speelminuut (met
   blessuretijd per helft); een eigen doelpunt wacht kort op de doelpuntmaker.
 - **Voetbalnederland:** standen van het amateurvoetbal, door vrijwilligers
@@ -256,7 +256,9 @@ adresbalk. Dat werkt alleen via **HTTPS** (net als delen met foto).
 
 De app bewaart geen pagina's op je apparaat; zonder netwerk zie je een melding.
 
-Het logo (`static/logo.svg`, plus de PNG-iconen voor de app en de meldingen) combineert de iconen
+Het logo staat ook groot in reliëf op de achtergrond (`static/watermark-light.svg`
+en `-dark.svg`). Het logo (`static/logo.svg`, plus de PNG-iconen voor de app en de
+meldingen) combineert de iconen
 "scoreboard-outline" en "share-all-outline" uit
 [Material Design Icons](https://pictogrammers.com/library/mdi/) van
 Pictogrammers (licentie Apache 2.0).

@@ -53,7 +53,7 @@ class RegistryTests(unittest.TestCase):
             state = ConnectionState()
             sources = build_sources(settings, state, Publisher(state).publish)
         self.assertEqual(list(sources), ["scoreboard", "voetbalnederland"])
-        self.assertEqual([s.label for s in sources.values()], ["Scorebord", "Voetbalnederland"])
+        self.assertEqual([s.label for s in sources.values()], ["LED Scores", "Voetbalnederland"])
         for source in sources.values():
             self.assertTrue(source.description)
             self.assertNotIn(SERVER_NAME, (source.label + source.description).lower())
@@ -236,11 +236,11 @@ class SourceWebTests(AioHTTPTestCase):
 
     async def test_app_is_called_matchshare(self):
         body = await (await self.client.get("/app", headers=AUTH)).text()
-        self.assertIn("<title>Connectie - Matchshare</title>", body)
+        self.assertIn("<title>Connectie - MatchShareNL</title>", body)
         manifest = await (await self.client.get("/manifest.webmanifest")).json(content_type=None)
-        self.assertEqual((manifest["name"], manifest["short_name"]), ("Matchshare", "Matchshare"))
+        self.assertEqual((manifest["name"], manifest["short_name"]), ("MatchShareNL", "MatchShareNL"))
         sw = await (await self.client.get("/sw.js")).text()
-        self.assertIn("'Matchshare'", sw)
+        self.assertIn("'MatchShareNL'", sw)
         for text in (body, sw, str(manifest)):
             self.assertNotIn("VSCO scorebord", text)
             self.assertNotIn(SERVER_NAME, text.lower().replace(SERVER_HOST, ""))

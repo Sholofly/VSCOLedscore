@@ -38,7 +38,7 @@ ALLOWED_PUSH_HOSTS = (
 MAX_SUBSCRIPTIONS = 20
 PRESENT_SECONDS = 6.0  # zo lang na de laatste update geldt de startpagina als "open"
 TTL_SECONDS = 600  # een melding die na 10 minuten nog niet is afgeleverd, vervalt
-TITLE = "Matchshare"
+TITLE = "MatchShareNL"
 # Elke melding toont het logo. De badge (statusbalk van Android) is een witte vorm op
 # transparant (het scorebord uit het logo), want Android gebruikt alleen de vorm.
 NOTIFICATION_ICON = "/static/icon-192.png"

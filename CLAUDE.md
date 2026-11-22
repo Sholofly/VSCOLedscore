@@ -1,7 +1,7 @@
 # CLAUDE.md
 
-**Matchshare**: Python 3.13-app die wedstrijdinformatie uit een gekozen **bron**
-(Scorebord via websocket, Voetbalnederland via REST; uitbreidbaar) omzet in
+**MatchShareNL**: Python 3.13-app die wedstrijdinformatie uit een gekozen **bron**
+(scorebord van LED Scores via websocket, Voetbalnederland via REST; uitbreidbaar) omzet in
 berichten om te delen, in een webomgeving voor de telefoon (Delen-knop,
 pushmeldingen, optioneel de foto van de doelpuntmaker). Draait in Docker op een
 Synology-NAS.
@@ -30,7 +30,7 @@ Gebruikersdocumentatie staat in [README.md](README.md).
 | [app.py](app.py) | Logging (`TokenRedactingFilter`, ruwe log), `.env` lezen, `main()` (bouwt bronnen, `SourceManager`, web) |
 | [sources/base.py](sources/base.py) | `Source` (basisklasse: `id`, `label`, `description`, `run`, `led`, `status_rows`), `Publisher` (log + berichten + push) |
 | [sources/__init__.py](sources/__init__.py) | `build_sources` (register, volgorde keuzelijst), `SourceManager` (laat alleen de gekozen bron draaien, wisselt op `settings.source_changed`) |
-| [sources/scoreboard.py](sources/scoreboard.py) | Bron Scorebord: `MatchLifecycle` (berichten uit statusovergangen), `Connector` (verbinding, reconnect), `ScoreboardSource` |
+| [sources/scoreboard.py](sources/scoreboard.py) | Bron LED Scores (id `scoreboard`): `MatchLifecycle` (berichten uit statusovergangen), `Connector` (verbinding, reconnect), `ScoreboardSource` |
 | [sources/voetbalnederland.py](sources/voetbalnederland.py) | Bron Voetbalnederland: client, `VoetbalnederlandLifecycle` (momentopnames → berichten), `VoetbalnederlandSource` (programma, pollen) |
 | [messages.py](messages.py) | Sjablonen: standaardteksten, aanduidingen (`{minuut}` ...), validatie, `Message` (tekst + foto-URL) |
 | [settings.py](settings.py) | Bron, URL/token, team, sjablonen in `data/settings.json` (heeft voorrang op `.env`), atomair opgeslagen |
@@ -78,7 +78,7 @@ Elk bericht is de volledige status (~175 KB JSON). Relevant in `scoreboard_data`
 - Er draait precies één bron: `Settings.source` (pagina Connectie, blok Bron en club), uitgevoerd
   door `SourceManager`. Een onbekende keuze valt terug op `scoreboard`. Een
   gecrashte bron wordt gelogd en na `RESTART_DELAY` opnieuw gestart.
-- "Je club": bij Scorebord de thuisploeg op het scorebord; bij Voetbalnederland
+- "Je club": bij LED Scores de thuisploeg op het scorebord; bij Voetbalnederland
   het gekozen team (`Settings.team_id`), thuis of uit.
 - **Een bron toevoegen:** subklasse van `Source` in `sources/`, registreren in
   `build_sources`, eigen instellingen in `settings.py` plus een blok in `web.py`
@@ -103,7 +103,7 @@ Elk bericht is de volledige status (~175 KB JSON). Relevant in `scoreboard_data`
 
 - De eerste ontvangen status is de beginsituatie: geen meldingen achteraf.
 - Eigen doelpunt wacht tot 20 s op de doelpuntmaker (instelbaar op de pagina
-  Connectie, blok Scorebord, `Settings.goal_wait_seconds`; per doelpunt opgevraagd) en
+  Connectie, blok LED Scores, `Settings.goal_wait_seconds`; per doelpunt opgevraagd) en
   wordt dan als één bericht gemeld; doelpunt tegenstander direct.
 - Stand omlaag = correctie: wachtend doelpunt vervalt, geen melding.
 - Minuten met blessuretijd per helft: eerste helft boven 45 wordt `45+n`, tweede
@@ -126,7 +126,7 @@ Elk bericht is de volledige status (~175 KB JSON). Relevant in `scoreboard_data`
   SameSite=Lax, 30 dagen); HTTP Basic blijft voor scripts. Openbaar zijn alleen
   `/login`, `/health`, `/manifest.webmanifest`, `/sw.js` en `/static/`.
 - CSRF-token op alle formulieren; CSP met een nonce per pagina; alles escapen.
-- Het token staat alleen in het blok Scorebord (verborgen veld met oog-icoon)
+- Het token staat alleen in het blok LED Scores (verborgen veld met oog-icoon)
   en wordt uit alle logregels gehaald (`TokenRedactingFilter`).
 - `/photo/<id>` geeft alleen foto's door die in een wedstrijdbericht voorkomen
   (geen willekeurige URL's ophalen).
@@ -150,10 +150,15 @@ Elk bericht is de volledige status (~175 KB JSON). Relevant in `scoreboard_data`
   `icon-512` afgeronde tegel, `icon-maskable-512` met de inhoud op 72 %, `apple-touch-icon`
   vol vlak, `badge-logo` alleen het witte scorebord, 96 px) zijn ermee gerenderd via Edge zonder venster (DevTools-screenshot met
   transparante achtergrond).
+- Logo van LED Scores: lokale kopie `static/ledscores-logo.png` (bijgesneden van ledscores.nl), op
+  een donker plaatje (`.brand-plate`) omdat het witte delen heeft; niet extern laden (CSP).
+- Achtergrond: het logo in reliëf (`static/watermark-light.svg` / `-dark.svg`, vlak in de
+  kleur van `--bg` met licht en schaduw; de pijl verzonken in het badge) via `body::before`
+  en de CSS-variabele `--watermark` per thema. Verandert `--bg`, maak ze dan opnieuw.
 - Pagina's: `/` berichten + statuslampje; `/pushmeldingen`, `/account` (weergave: cookie `theme` via POST `/theme`,
   `data-theme` op `<html>`, zonder keuze volgt de CSS `prefers-color-scheme`; uitloggen),
   `/me` stuurt door; `/app` (Connectie, alleen beheerder: blokken Bron en club
-  (bovenaan, open; één formulier, samen opgeslagen; club vast bij Scorebord, live zoeken
+  (bovenaan, open; één formulier, samen opgeslagen; club vast bij LED Scores, live zoeken
   via `/teams` bij Voetbalnederland), het blok van de gekozen bron
   (`SOURCE_PANELS`), Status, Logging), `/sjablonen` (alleen beheerder: Hashtag en
   Berichtteksten, `TEMPLATE_BLOCKS`; `app_page` met zo'n blok toont deze pagina), `/share/<sleutel>` (deelscherm uit een pushmelding).

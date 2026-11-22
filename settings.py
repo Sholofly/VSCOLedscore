@@ -1,4 +1,4 @@
-"""Wijzigbare instellingen van Matchshare (bron, verbinding, sjablonen), bewaard in data/settings.json.
+"""Wijzigbare instellingen van MatchShareNL (bron, verbinding, sjablonen), bewaard in data/settings.json.
 
 Waarden uit .env zijn de beginwaarden; wat via de webomgeving is opgeslagen
 heeft voorrang. Het token wordt nooit teruggegeven aan de webomgeving.
