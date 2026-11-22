@@ -12,6 +12,7 @@ from app import Connector
 from settings import Settings
 from state import ConnectionState
 from tikkie import (
+    MAX_SLEEP_SECONDS,
     PRE_KICKOFF,
     REFRESH_SECONDS,
     TikkieClient,
@@ -231,7 +232,7 @@ class WatcherTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_no_match_today(self):
         w = self.watcher(FakeClient(today=None))
-        self.assertEqual(await w.step(), REFRESH_SECONDS)
+        self.assertEqual(await w.step(), MAX_SLEEP_SECONDS)
         self.assertEqual(w.state.status, "geen wedstrijd vandaag")
 
     async def test_home_match_in_auto_mode_uses_the_scoreboard(self):
@@ -249,15 +250,49 @@ class WatcherTests(unittest.IsolatedAsyncioTestCase):
         wait = await w.step()
         self.assertEqual(w.active_source(), "tikkieterug")
         self.assertEqual(client.match_calls, 0)
-        self.assertAlmostEqual(wait, min(REFRESH_SECONDS, ((datetime(2026, 11, 28, 14, 30) - PRE_KICKOFF) - self.clock).total_seconds()))
+        self.assertEqual(wait, MAX_SLEEP_SECONDS)  # nooit lang slapen: elke minuut op de echte klok kijken
         self.clock = datetime(2026, 11, 28, 14, 16)
         for _ in range(4):
             wait = await w.step()
         self.assertEqual([e.kind for e in self.published], ["start", "goal_home", "end_win"])
-        self.assertEqual(wait, REFRESH_SECONDS)
+        self.assertEqual(wait, MAX_SLEEP_SECONDS)
         await w.step()
         self.assertEqual(client.match_calls, 4)  # na het einde niet meer bevragen
         self.assertEqual(w.state.status, "wedstrijd afgelopen")
+
+    async def test_after_sleep_mode_polling_starts_within_a_minute(self):
+        # Regressie: de pc sliep tijdens de aftrap; de app (in de Docker-VM) stond stil en
+        # een lange timer liep daarna nog minutenlang door. Nu slaapt de watcher hooguit
+        # een minuut en kijkt hij dan op de echte klok.
+        client = FakeClient(today=match(), details=[match("live", [goal("home", 1, 5)])])
+        w = self.watcher(client)
+        self.clock = datetime(2026, 11, 28, 12, 0)
+        self.assertLessEqual(await w.step(), MAX_SLEEP_SECONDS)
+        self.assertEqual(client.match_calls, 0)
+        self.clock = datetime(2026, 11, 28, 14, 55)  # wakker na de slaapstand: klok sprong vooruit
+        self.assertEqual(await w.step(), self.settings.poll_seconds)
+        self.assertEqual(client.match_calls, 1)  # meteen bevraagd
+        self.assertEqual(w.state.status, "volgt de uitwedstrijd")
+
+    async def test_programme_is_refreshed_on_the_real_clock(self):
+        calls = []
+
+        class Counting(FakeClient):
+            async def today_match(self, team_id, day):
+                calls.append(day)
+                return None
+
+        w = self.watcher(Counting())
+        self.clock = datetime(2026, 11, 28, 10, 0)
+        await w.step()
+        self.clock = datetime(2026, 11, 28, 10, 5)
+        await w.step()
+        self.assertEqual(len(calls), 1)  # binnen 10 minuten niet opnieuw
+        self.clock = datetime(2026, 11, 28, 10, 11)
+        await w.step()
+        self.clock = datetime(2026, 11, 29, 10, 11, 30)  # nieuwe dag
+        await w.step()
+        self.assertEqual(calls, [date(2026, 11, 28)] * 2 + [date(2026, 11, 29)])
 
     async def test_poll_interval_comes_from_the_settings(self):
         self.settings.poll_seconds = 45

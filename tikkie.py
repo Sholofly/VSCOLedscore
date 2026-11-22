@@ -30,6 +30,10 @@ from state import now as state_now
 logger = logging.getLogger(__name__)
 
 REFRESH_SECONDS = 600.0  # zo vaak het programma van vandaag opnieuw ophalen
+# Nooit langer dan dit slapen: de watcher kijkt dan opnieuw op de echte klok. Lange
+# timers lopen op een klok die stilstaat als de pc (en de Docker-VM) in slaapstand
+# gaat; na het wakker worden zou de app dan te laat beginnen met bevragen.
+MAX_SLEEP_SECONDS = 60.0
 PRE_KICKOFF = timedelta(minutes=15)  # vanaf dan de wedstrijd bevragen
 ERROR_RETRY_SECONDS = 60.0
 REQUEST_TIMEOUT = 20.0
@@ -274,7 +278,7 @@ class TikkieWatcher:
         self.now = now
         self.state = TikkieState()
         self.match: dict | None = None  # de wedstrijd van vandaag, of None
-        self._match_checked: tuple[float, date, int | None] | None = None
+        self._match_checked: tuple[datetime, int | None] | None = None
         self._lifecycle: TikkieLifecycle | None = None
         self._lifecycle_match: int | None = None
         self._finished: set[int] = set()
@@ -307,14 +311,17 @@ class TikkieWatcher:
             return None
 
     async def _refresh_match(self, force: bool) -> None:
-        loop_time = asyncio.get_running_loop().time()
-        today = self.now().date()
+        # Op de echte klok (niet de loop-klok): klopt ook na een slaapstand.
+        now = self.now()
         team = self.settings.team_id
         checked = self._match_checked
-        if not force and checked and checked[1] == today and checked[2] == team and loop_time - checked[0] < REFRESH_SECONDS:
+        if (
+            not force and checked and checked[1] == team and checked[0].date() == now.date()
+            and timedelta(0) <= now - checked[0] < timedelta(seconds=REFRESH_SECONDS)
+        ):
             return
-        self.match = await self.client.today_match(team, today)
-        self._match_checked = (loop_time, today, team)
+        self.match = await self.client.today_match(team, now.date())
+        self._match_checked = (now, team)
 
     def _lifecycle_for(self, match: Mapping[str, Any]) -> TikkieLifecycle:
         match_id = match.get("matchId")
@@ -346,19 +353,19 @@ class TikkieWatcher:
         if match is None:
             self.state.match_text = ""
             self.state.set("geen wedstrijd vandaag", "ok")
-            return REFRESH_SECONDS
+            return MAX_SLEEP_SECONDS
         self.state.match_text = describe(match)
         if self.state.source != "tikkieterug":
             self.state.set("thuiswedstrijd: het scorebord levert de berichten", "ok")
-            return REFRESH_SECONDS
+            return MAX_SLEEP_SECONDS
         if match.get("matchId") in self._finished:
             self.state.set("wedstrijd afgelopen", "ok")
-            return REFRESH_SECONDS
+            return MAX_SLEEP_SECONDS
         kickoff = self._kickoff(match)
         if kickoff is not None and self.now() < kickoff - PRE_KICKOFF:
             self.state.set(f"wacht op de aftrap ({match.get('time')})", "ok")
             wait = (kickoff - PRE_KICKOFF - self.now()).total_seconds()
-            return max(1.0, min(REFRESH_SECONDS, wait))
+            return max(1.0, min(MAX_SLEEP_SECONDS, wait))
         try:
             detail = await self.client.match(match["matchId"], match.get("source", 1))
         except (TikkieError, KeyError) as error:
@@ -372,7 +379,7 @@ class TikkieWatcher:
         if detail.get("status") == "ended":
             self._finished.add(match.get("matchId"))
             self.state.set("wedstrijd afgelopen", "ok")
-            return REFRESH_SECONDS
+            return MAX_SLEEP_SECONDS
         self.state.set("volgt de uitwedstrijd", "ok")
         return float(self.settings.poll_seconds)
 
