@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "tikkieterug": {
+      "type": "http",
+      "url": "https://tikkieterug.sholofly.nl/mcp",
+      "headers": { "X-Api-Key": "${TIKKIETERUG_MCP_KEY}" }
+    }
+  }
+}
